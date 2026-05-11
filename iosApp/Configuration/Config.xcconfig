@@ -1,0 +1,7 @@
+TEAM_ID=
+
+PRODUCT_NAME=Meshovikprototype
+PRODUCT_BUNDLE_IDENTIFIER=com.example.meshovik_prototype.Meshovikprototype$(TEAM_ID)
+
+CURRENT_PROJECT_VERSION=1
+MARKETING_VERSION=1.0

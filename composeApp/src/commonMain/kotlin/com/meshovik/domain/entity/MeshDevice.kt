@@ -1,0 +1,22 @@
+package com.meshovik.domain.entity
+
+import kotlin.time.Instant
+import kotlinx.serialization.Contextual
+import kotlinx.serialization.Serializable
+
+/**
+ * Represents a device in the BLE Mesh network.
+ */
+@Serializable
+data class MeshDevice(
+    val id: String,
+    val name: String,
+    val address: String,
+    val rssi: Int = 0,
+
+    @Contextual
+    val lastSeen: Instant = Instant.DISTANT_PAST,
+
+    val isOnline: Boolean = false,
+    val hopCount: Int = 0
+)
