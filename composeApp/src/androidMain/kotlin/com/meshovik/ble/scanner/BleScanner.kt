@@ -34,6 +34,8 @@ class BleScanner(
 
     private var isScanning = false
 
+    private var currentScanCallback: ScanCallback? = null
+
     /**
      * Checks if BLE is supported on this device.
      */
@@ -100,17 +102,7 @@ class BleScanner(
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 super.onBatchScanResults(results)
                 results.forEach { result ->
-                    val device = result.device
-                    val meshDevice = MeshDevice(
-                        id = device.address,
-                        name = device.name ?: "Unknown Device",
-                        address = device.address,
-                        rssi = result.rssi,
-                        lastSeen = Clock.System.now(),
-                        isOnline = true,
-                        hopCount = 0
-                    )
-                    trySend(meshDevice)
+                    trySend(createMeshDevice(result))
                 }
             }
 
@@ -118,10 +110,25 @@ class BleScanner(
                 super.onScanFailed(errorCode)
                 Timber.e("BLE scan failed with error code: $errorCode")
             }
+
+            private fun createMeshDevice(result: ScanResult): MeshDevice {
+                val device = result.device
+                return MeshDevice(
+                    id = device.address,
+                    name = device.name ?: "Unknown Device",
+                    address = device.address,
+                    rssi = result.rssi,
+                    lastSeen = Clock.System.now(),
+                    isOnline = true,
+                    hopCount = 0
+                )
+            }
         }
 
+        currentScanCallback = scanCallback
+
         try {
-            scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
+            scanner.startScan(null, scanSettings, scanCallback)
             isScanning = true
             Timber.i("BLE scan started")
         } catch (e: SecurityException) {
@@ -148,16 +155,19 @@ class BleScanner(
      */
     @SuppressLint("MissingPermission")
     fun stopScanning() {
-        if (isScanning) {
+        val callback = currentScanCallback ?: return
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+
+        if (scanner != null && isScanning) {
             try {
-                bluetoothAdapter?.bluetoothLeScanner?.let { scanner ->
-                    // Note: We need the same callback instance to stop scanning
-                    // This is handled by the callbackFlow's awaitClose
-                }
-                isScanning = false
+                scanner.stopScan(callback)
+                Timber.i("BLE Scan stopped successfully")
             } catch (e: Exception) {
-                Timber.e(e, "Failed to stop scanning")
+                Timber.e(e, "Error stopping BLE scan")
             }
         }
+
+        currentScanCallback = null
+        isScanning = false
     }
 }
