@@ -128,7 +128,7 @@ class BleScanner(
         currentScanCallback = scanCallback
 
         try {
-            scanner.startScan(null, scanSettings, scanCallback)
+            scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
             isScanning = true
             Timber.i("BLE scan started")
         } catch (e: SecurityException) {

@@ -7,7 +7,7 @@ import java.util.UUID
  */
 object BleConstants {
     // Custom GATT Service UUID for Meshovik Mesh Network
-    val MESH_SERVICE_UUID: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+    val MESH_SERVICE_UUID: UUID = UUID.fromString("A1B2C3D4-E5F6-7890-A1B2-C3D4E5F67890")
 
     // Characteristic UUIDs
     val MESH_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567891")

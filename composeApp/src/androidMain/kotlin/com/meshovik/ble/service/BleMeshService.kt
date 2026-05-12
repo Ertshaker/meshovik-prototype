@@ -237,6 +237,8 @@ class BleMeshService(
      */
     @SuppressLint("MissingPermission")
     private fun startAdvertising() {
+        val randomUserName = "borov${(1..10).random()}"
+
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         if (advertiser == null) {
             Timber.e("BLE advertising not supported on this device")
@@ -252,12 +254,13 @@ class BleMeshService(
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(true)
-            .addServiceUuid(ParcelUuid(BleConstants.MESH_SERVICE_UUID))
+            .addServiceData(ParcelUuid(BleConstants.MESH_SERVICE_UUID), randomUserName.toByteArray())
             .setIncludeTxPowerLevel(false)
             .build()
 
         val scanResponse = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(BleConstants.MESH_SERVICE_UUID))
+            .addServiceData(ParcelUuid(BleConstants.MESH_SERVICE_UUID), randomUserName.toByteArray())
             .build()
 
         val advertiseCallback = object : AdvertiseCallback() {
