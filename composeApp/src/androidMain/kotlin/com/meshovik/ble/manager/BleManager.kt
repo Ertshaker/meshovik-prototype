@@ -69,12 +69,12 @@ class BleManager(
         try {
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             val adapter = bluetoothManager.adapter
-            localDeviceAddress = "unknown"
+            localDeviceAddress = "Skibidi${(1..10).random()}"
             localDeviceName = adapter?.name ?: "Meshovik Device"
             Timber.i("Local device: $localDeviceName ($localDeviceAddress)")
         } catch (e: SecurityException) {
             Timber.e(e, "Missing BLE permissions for device info")
-            localDeviceAddress = "unknown"
+            localDeviceAddress = "Skibidi${(1..10).random()}"
             localDeviceName = "Meshovik Device"
         }
     }
@@ -105,15 +105,24 @@ class BleManager(
                 }
             }
         }
+
+        scope.launch {
+            bleMeshService.advertisingState.collectLatest { isAdvertising ->
+                _isAdvertising.value = isAdvertising
+                if (isAdvertising) {
+                    Timber.i("Advertising state: ON")
+                } else {
+                    Timber.w("Advertising state: OFF")
+                }
+            }
+        }
     }
 
     /**
      * Starts the mesh service (GATT server + advertising).
      */
     fun startMeshService(): Flow<Boolean> {
-        return bleMeshService.startService().also {
-            _isAdvertising.value = true
-        }
+        return bleMeshService.startService()
     }
 
     /**

@@ -45,6 +45,11 @@ class BleMeshService(
     private var gattServer: BluetoothGattServer? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var isAdvertising = false
+    private var advertiseCallback: AdvertiseCallback? = null
+
+    // Flow for advertising state changes
+    private val _advertisingState = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val advertisingState: SharedFlow<Boolean> = _advertisingState.asSharedFlow()
 
     // Flow for received data
     private val _receivedData = MutableSharedFlow<ByteArray>(extraBufferCapacity = 64)
@@ -237,13 +242,20 @@ class BleMeshService(
      */
     @SuppressLint("MissingPermission")
     private fun startAdvertising() {
-        val randomUserName = "borov${(1..10).random()}"
+        Timber.d("startAdvertising() called")
+        
+        // Use shorter username to fit within 31-byte BLE advertising packet limit
+        val randomUserName = "b${(1..99).random()}"
+        Timber.d("Generated random username: $randomUserName")
 
         advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
         if (advertiser == null) {
-            Timber.e("BLE advertising not supported on this device")
+            Timber.e("BLE advertising not supported on this device (bluetoothLeAdvertiser is null)")
+            _advertisingState.tryEmit(false)
             return
         }
+        
+        Timber.d("BluetoothLeAdvertiser obtained successfully")
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
@@ -251,36 +263,64 @@ class BleMeshService(
             .setTimeout(0) // Advertise indefinitely
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
+        
+        Timber.d("AdvertiseSettings built: $settings")
 
+        // ADV_IND packet: only service data (no device name, no tx power)
+        // ~24 bytes: flags(2) + serviceData(1+1+16+4) = 24
+        val serviceDataBytes = randomUserName.toByteArray(Charsets.UTF_8)
+        Timber.d("Service data bytes length: ${serviceDataBytes.size}")
+        
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
-            .addServiceData(ParcelUuid(BleConstants.MESH_SERVICE_UUID), randomUserName.toByteArray())
+            .setIncludeDeviceName(false)
+            .addServiceData(ParcelUuid(BleConstants.MESH_SERVICE_UUID), serviceDataBytes)
             .setIncludeTxPowerLevel(false)
             .build()
+        
+        Timber.d("AdvertiseData built successfully")
 
+        // SCAN_RSP packet: only service UUID (no service data to avoid overflow)
+        // ~18 bytes: serviceUuid(1+1+16) = 18
         val scanResponse = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(BleConstants.MESH_SERVICE_UUID))
-            .addServiceData(ParcelUuid(BleConstants.MESH_SERVICE_UUID), randomUserName.toByteArray())
             .build()
+        
+        Timber.d("ScanResponse built successfully")
 
-        val advertiseCallback = object : AdvertiseCallback() {
+        advertiseCallback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
                 super.onStartSuccess(settingsInEffect)
                 isAdvertising = true
-                Timber.i("BLE advertising started successfully")
+                _advertisingState.tryEmit(true)
+                Timber.i("BLE advertising started successfully, settings: $settingsInEffect")
             }
 
             override fun onStartFailure(errorCode: Int) {
                 super.onStartFailure(errorCode)
                 isAdvertising = false
-                Timber.e("BLE advertising failed with error code: $errorCode")
+                _advertisingState.tryEmit(false)
+                val errorName = when (errorCode) {
+                    1 -> "ADVERTISE_FAILED_DATA_TOO_LARGE"
+                    2 -> "ADVERTISE_FAILED_TOO_MANY_ADVERTISERS"
+                    3 -> "ADVERTISE_FAILED_ALREADY_STARTED"
+                    4 -> "ADVERTISE_FAILED_INTERNAL_ERROR"
+                    5 -> "ADVERTISE_FAILED_FEATURE_UNSUPPORTED"
+                    else -> "UNKNOWN($errorCode)"
+                }
+                Timber.e("BLE advertising failed with error code: $errorCode ($errorName)")
             }
         }
 
         try {
-            advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback)
+            Timber.d("Calling advertiser.startAdvertising()...")
+            advertiser?.startAdvertising(settings, data, scanResponse, advertiseCallback!!)
+            Timber.d("Advertising start requested, waiting for callback")
+        } catch (e: SecurityException) {
+            Timber.e(e, "Missing BLUETOOTH_ADVERTISE permission")
+            _advertisingState.tryEmit(false)
         } catch (e: Exception) {
             Timber.e(e, "Failed to start advertising")
+            _advertisingState.tryEmit(false)
         }
     }
 
@@ -357,9 +397,16 @@ class BleMeshService(
     fun stopService() {
         try {
             if (isAdvertising) {
-                advertiser?.stopAdvertising(object : AdvertiseCallback() {})
+                val callback = advertiseCallback
+                if (callback != null) {
+                    advertiser?.stopAdvertising(callback)
+                    _advertisingState.tryEmit(false)
+                    Timber.i("BLE advertising stopped")
+                } else {
+                    Timber.w("AdvertiseCallback is null, cannot stop advertising")
+                }
                 isAdvertising = false
-                Timber.i("BLE advertising stopped")
+                advertiseCallback = null
             }
             gattServer?.close()
             gattServer = null

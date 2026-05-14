@@ -86,9 +86,10 @@ class BleScanner(
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 super.onScanResult(callbackType, result)
                 val device = result.device
+                val deviceName = extractDeviceName(result)
                 val meshDevice = MeshDevice(
                     id = device.address,
-                    name = device.name ?: "Unknown Device",
+                    name = deviceName,
                     address = device.address,
                     rssi = result.rssi,
                     lastSeen = Clock.System.now(),
@@ -96,13 +97,25 @@ class BleScanner(
                     hopCount = 0
                 )
                 trySend(meshDevice)
-                Timber.d("Discovered device: ${meshDevice.name} (${meshDevice.address}) RSSI: ${meshDevice.rssi}")
+                Timber.d("Discovered device: ${meshDevice.name} (${meshDevice.address}) RSSI: ${meshDevice.rssi}, scanRecord: ${result.scanRecord}")
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 super.onBatchScanResults(results)
                 results.forEach { result ->
-                    trySend(createMeshDevice(result))
+                    val deviceName = extractDeviceName(result)
+                    val device = result.device
+                    trySend(
+                        MeshDevice(
+                            id = device.address,
+                            name = deviceName,
+                            address = device.address,
+                            rssi = result.rssi,
+                            lastSeen = Clock.System.now(),
+                            isOnline = true,
+                            hopCount = 0
+                        )
+                    )
                 }
             }
 
@@ -111,17 +124,44 @@ class BleScanner(
                 Timber.e("BLE scan failed with error code: $errorCode")
             }
 
-            private fun createMeshDevice(result: ScanResult): MeshDevice {
+            /**
+             * Извлекает имя устройства из Service Data, fallback на device.name.
+             */
+            private fun extractDeviceName(result: ScanResult): String {
+                val scanRecord = result.scanRecord
+                
+                // First, try to extract from Service Data for our mesh UUID
+                if (scanRecord != null) {
+                    val serviceData = scanRecord.serviceData
+                    val meshUuid = ParcelUuid(BleConstants.MESH_SERVICE_UUID)
+                    val serviceDataBytes = serviceData[meshUuid]
+                    if (serviceDataBytes != null) {
+                        try {
+                            val name = String(serviceDataBytes, Charsets.UTF_8)
+                            if (name.isNotBlank()) {
+                                Timber.d("Device name from service data: $name")
+                                return name
+                            }
+                        } catch (e: Exception) {
+                            Timber.w("Failed to parse device name from service data: $e")
+                        }
+                    }
+                    
+                    // Fallback: try standard device name from scan record
+                    val localName = scanRecord.deviceName
+                    if (!localName.isNullOrBlank()) {
+                        return localName
+                    }
+                }
+
+                // Last fallback: try Bluetooth device name (may be null for unconnected devices)
                 val device = result.device
-                return MeshDevice(
-                    id = device.address,
-                    name = device.name ?: "Unknown Device",
-                    address = device.address,
-                    rssi = result.rssi,
-                    lastSeen = Clock.System.now(),
-                    isOnline = true,
-                    hopCount = 0
-                )
+                val standardName = device.name
+                if (!standardName.isNullOrBlank()) {
+                    return standardName
+                }
+
+                return "Unknown Device"
             }
         }
 
@@ -130,7 +170,7 @@ class BleScanner(
         try {
             scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
             isScanning = true
-            Timber.i("BLE scan started")
+            Timber.i("BLE scan started with filter for mesh service UUID")
         } catch (e: SecurityException) {
             Timber.e(e, "Missing BLE permissions")
             close()

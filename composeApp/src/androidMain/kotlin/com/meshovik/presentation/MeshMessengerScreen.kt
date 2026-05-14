@@ -39,9 +39,10 @@ fun MeshMessengerScreen(
         }
     }
 
-    // Start mesh service on launch
+    // Start mesh service and scanning on launch
     LaunchedEffect(Unit) {
         viewModel.startMeshService()
+        viewModel.startScanning()
     }
 
     Scaffold(
@@ -120,22 +121,36 @@ private fun StatusCard(
             containerColor = if (isAdvertising) Color(0xFF4CAF50).copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isAdvertising) "● Advertising" else "○ Not advertising",
+                    color = if (isAdvertising) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (isScanning) "● Scanning" else "○ Idle",
+                    color = if (isScanning) Color(0xFF2196F3) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
-                text = if (isAdvertising) "● Advertising" else "○ Not advertising",
-                color = if (isAdvertising) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                text = "$deviceCount devices discovered",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = if (isScanning) "● Scanning" else "○ Idle",
-                color = if (isScanning) Color(0xFF2196F3) else MaterialTheme.colorScheme.onSurfaceVariant
+                text = "Tip: Ensure both devices have granted BLE permissions and Bluetooth is enabled",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text("$deviceCount devices")
         }
     }
 }
@@ -157,7 +172,7 @@ private fun DeviceList(
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 150.dp),
+                .heightIn(max = 220.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(devices) { device ->
@@ -194,7 +209,7 @@ private fun DeviceItem(
             Column {
                 Text(device.name, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${MeshUtils.formatAddress(device.address)} • RSSI: ${device.rssi}",
+                    "${device.address} • RSSI: ${device.rssi}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -251,7 +266,7 @@ private fun MessageItem(message: MeshMessage) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    "From: ${MeshUtils.formatAddress(message.senderId)}",
+                    "From: ${message.senderId}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
