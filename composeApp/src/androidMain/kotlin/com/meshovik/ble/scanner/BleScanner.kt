@@ -14,12 +14,15 @@ import com.meshovik.domain.entity.MeshDevice
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
 import timber.log.Timber
 import kotlin.time.Clock
 
 /**
  * BLE Scanner for discovering mesh devices.
  * Uses Android BLE scanning API with custom service UUID filter.
+ * All scanning operations run on Dispatchers.IO to prevent ANR.
  */
 class BleScanner(
     private val context: Context
@@ -36,6 +39,13 @@ class BleScanner(
 
     private var currentScanCallback: ScanCallback? = null
 
+    // Track recently seen devices with timestamps to avoid duplicate emissions
+    // Using a map of address -> lastSeenTime instead of a simple set
+    private val seenDevices = mutableMapOf<String, Long>()
+    
+    // Time window for considering a device as "recently seen" (5 seconds)
+    private val DEDUP_WINDOW_MS = 5_000L
+
     /**
      * Checks if BLE is supported on this device.
      */
@@ -49,6 +59,7 @@ class BleScanner(
     /**
      * Starts scanning for mesh devices and returns a Flow of discovered devices.
      * The scan runs until the flow is cancelled or stopScanning() is called.
+     * All scanning operations run on Dispatchers.IO.
      */
     @SuppressLint("MissingPermission")
     fun scanForDevices(): Flow<MeshDevice> = callbackFlow {
@@ -86,37 +97,33 @@ class BleScanner(
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 super.onScanResult(callbackType, result)
                 val device = result.device
+                val address = device.address
+                val now = System.currentTimeMillis()
+                
+                // Deduplicate: only emit if we haven't seen this device within the dedup window
+                val lastSeen = seenDevices[address] ?: 0L
+                if (now - lastSeen < DEDUP_WINDOW_MS) {
+                    return
+                }
+                seenDevices[address] = now
+                
                 val deviceName = extractDeviceName(result)
                 val meshDevice = MeshDevice(
-                    id = device.address,
+                    id = address,
                     name = deviceName,
-                    address = device.address,
+                    address = address,
                     rssi = result.rssi,
                     lastSeen = Clock.System.now(),
                     isOnline = true,
                     hopCount = 0
                 )
                 trySend(meshDevice)
-                Timber.d("Discovered device: ${meshDevice.name} (${meshDevice.address}) RSSI: ${meshDevice.rssi}, scanRecord: ${result.scanRecord}")
+                Timber.d("Discovered device: ${meshDevice.name} (${meshDevice.address}) RSSI: ${meshDevice.rssi}")
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
                 super.onBatchScanResults(results)
-                results.forEach { result ->
-                    val deviceName = extractDeviceName(result)
-                    val device = result.device
-                    trySend(
-                        MeshDevice(
-                            id = device.address,
-                            name = deviceName,
-                            address = device.address,
-                            rssi = result.rssi,
-                            lastSeen = Clock.System.now(),
-                            isOnline = true,
-                            hopCount = 0
-                        )
-                    )
-                }
+                // Skip batch results - we handle everything in onScanResult to avoid duplicates
             }
 
             override fun onScanFailed(errorCode: Int) {
@@ -166,6 +173,8 @@ class BleScanner(
         }
 
         currentScanCallback = scanCallback
+        // Don't clear seenDevices here - keep deduplication across scan restarts
+        // This prevents re-emitting the same devices immediately after scan restart
 
         try {
             scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
@@ -188,7 +197,7 @@ class BleScanner(
                 Timber.e(e, "Failed to stop BLE scan")
             }
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * Stops the current scan if running.
@@ -209,5 +218,11 @@ class BleScanner(
 
         currentScanCallback = null
         isScanning = false
+        // Clean old entries from seenDevices (older than 30 seconds)
+        val now = System.currentTimeMillis()
+        seenDevices.entries.removeAll { (_, timestamp) ->
+            now - timestamp > 30_000L
+        }
+        Timber.d("Cleaned seenDevices cache, ${seenDevices.size} devices remaining")
     }
 }

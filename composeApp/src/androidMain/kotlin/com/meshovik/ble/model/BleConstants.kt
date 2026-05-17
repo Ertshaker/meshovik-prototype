@@ -28,4 +28,7 @@ object BleConstants {
     const val DEFAULT_TTL = 5
     const val MAX_HOP_COUNT = 10
     const val DEDUPLICATION_WINDOW_MS = 30_000L
+    
+    // Connection limits
+    const val MAX_CONCURRENT_CONNECTIONS = 7
 }

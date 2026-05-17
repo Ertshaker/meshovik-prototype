@@ -1,10 +1,11 @@
 package com.meshovik.domain.entity
 
+import com.meshovik.data.remote.transport.TransportType
 import kotlinx.serialization.Serializable
 
 /**
- * Represents a raw BLE packet for transmission over the mesh network.
- * This is the wire format used for BLE characteristic read/write operations.
+ * Represents a raw packet for transmission over the mesh network.
+ * Transport-agnostic wire format that can be used with BLE, Wi-Fi Direct, etc.
  */
 @Serializable
 data class MeshPacket(
@@ -14,7 +15,12 @@ data class MeshPacket(
     val ttl: Int,
     val hopCount: Int,
     val payload: ByteArray,
-    val timestamp: Long
+    val timestamp: Long,
+    /**
+     * The transport this packet is intended for.
+     * Used for routing and serialization decisions.
+     */
+    val transportType: TransportType? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -27,6 +33,7 @@ data class MeshPacket(
         if (hopCount != other.hopCount) return false
         if (!payload.contentEquals(other.payload)) return false
         if (timestamp != other.timestamp) return false
+        if (transportType != other.transportType) return false
         return true
     }
 
@@ -38,10 +45,15 @@ data class MeshPacket(
         result = 31 * result + hopCount
         result = 31 * result + payload.contentHashCode()
         result = 31 * result + timestamp.hashCode()
+        result = 31 * result + (transportType?.hashCode() ?: 0)
         return result
     }
 
     companion object {
-        const val MAX_PAYLOAD_SIZE = 480 // BLE MTU is typically 512, leaving room for headers
+        /**
+         * Default max payload size - conservative value for BLE compatibility.
+         * Individual transports may support larger payloads.
+         */
+        const val MAX_PAYLOAD_SIZE = 480
     }
 }

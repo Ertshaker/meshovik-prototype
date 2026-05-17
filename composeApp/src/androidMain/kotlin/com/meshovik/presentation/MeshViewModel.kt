@@ -3,16 +3,22 @@ package com.meshovik.presentation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshovik.ble.manager.BleManager
+import com.meshovik.data.remote.transport.ConnectionManager
+import com.meshovik.data.remote.transport.TransportResult
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
+import com.meshovik.domain.entity.MeshMessageStatus
+import com.meshovik.domain.entity.MessageType
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import kotlin.time.Clock
 
 /**
  * Main ViewModel for the mesh messenger.
  * Coordinates BLE operations and UI state.
+ * Uses transport-agnostic repository for message operations.
  */
 class MeshViewModel(
     private val bleManager: BleManager,
@@ -69,16 +75,9 @@ class MeshViewModel(
     }
 
     /**
-     * Observes received messages from BLE manager.
+     * Observes received messages from repository (transport-agnostic).
      */
     private fun observeMessages() {
-        viewModelScope.launch {
-            bleManager.receivedMessages.collect { messages ->
-                messages.forEach { meshRepository.addReceivedMessage(it) }
-                _uiState.update { it.copy(receivedMessages = messages) }
-            }
-        }
-
         viewModelScope.launch {
             meshRepository.messages.collect { messages ->
                 _uiState.update { it.copy(receivedMessages = messages) }
@@ -125,36 +124,82 @@ class MeshViewModel(
     }
 
     /**
-     * Sends a message to a specific device.
+     * Sends a message to a specific device via the transport layer.
      */
     fun sendMessage(targetAddress: String, content: String) {
         if (content.isBlank()) return
 
-        val message = bleManager.sendMessage(targetAddress, content)
-        meshRepository.addSentMessage(message)
+        val messageId = targetAddress.take(4) + "_" + System.currentTimeMillis().toString(16).takeLast(4)
+        val sentMessage = MeshMessage(
+            id = messageId,
+            senderId = bleManager.getLocalAddress(),
+            receiverId = targetAddress,
+            content = content,
+            type = MessageType.TEXT,
+            timestamp = Clock.System.now(),
+            status = MeshMessageStatus.SENT
+        )
+
+        meshRepository.addSentMessage(sentMessage)
         _uiState.update { state ->
-            state.copy(sentMessages = state.sentMessages + message)
+            state.copy(sentMessages = state.sentMessages + sentMessage)
         }
 
         viewModelScope.launch {
-            _events.emit(MeshEvent.MessageSent(message))
+            val result = meshRepository.sendMessage(targetAddress, content)
+            when (result) {
+                is TransportResult.Success -> {
+                    Timber.i("Message sent via transport: $messageId")
+                    _events.emit(MeshEvent.MessageSent(sentMessage))
+                }
+                is TransportResult.Error -> {
+                    Timber.e("Failed to send message: ${result.message}")
+                    _events.emit(MeshEvent.Error("Failed to send: ${result.message}"))
+                }
+                is TransportResult.InProgress -> {
+                    Timber.d("Message sending in progress: $messageId")
+                }
+            }
         }
     }
 
     /**
-     * Broadcasts a message to all discovered devices.
+     * Broadcasts a message to all discovered devices via the transport layer.
      */
     fun broadcastMessage(content: String) {
         if (content.isBlank()) return
 
-        val message = bleManager.broadcastMessage(content)
-        meshRepository.addSentMessage(message)
+        val messageId = "broadcast_" + System.currentTimeMillis().toString(16).takeLast(4)
+        val sentMessage = MeshMessage(
+            id = messageId,
+            senderId = bleManager.getLocalAddress(),
+            receiverId = "BROADCAST",
+            content = content,
+            type = MessageType.FLOOD,
+            timestamp = Clock.System.now(),
+            status = MeshMessageStatus.SENT
+        )
+
+        meshRepository.addSentMessage(sentMessage)
         _uiState.update { state ->
-            state.copy(sentMessages = state.sentMessages + message)
+            state.copy(sentMessages = state.sentMessages + sentMessage)
         }
 
         viewModelScope.launch {
-            _events.emit(MeshEvent.MessageBroadcast(message))
+            val result = meshRepository.broadcastMessage(content)
+            when (result) {
+                is TransportResult.Success -> {
+                    Timber.i("Broadcast sent via transport: $messageId")
+                    _events.emit(MeshEvent.MessageBroadcast(sentMessage))
+                }
+                is TransportResult.Error -> {
+                    Timber.e("Failed to broadcast: ${result.message}")
+                    _events.emit(MeshEvent.Error("Failed to broadcast: ${result.message}"))
+                }
+                is TransportResult.InProgress -> {
+                    Timber.d("Broadcast sending in progress: $messageId")
+                }
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 package com.meshovik.domain.entity
 
+import com.meshovik.data.remote.transport.TransportType
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
@@ -17,7 +18,8 @@ enum class MessageType {
 }
 
 /**
- * Represents a message in the BLE Mesh network.
+ * Represents a message in the mesh network.
+ * Transport-agnostic - can be used with BLE, Wi-Fi Direct, or any other transport.
  */
 @Serializable
 data class MeshMessage(
@@ -31,7 +33,12 @@ data class MeshMessage(
     val timestamp: kotlin.time.Instant = Clock.System.now(),
     val status: MeshMessageStatus = MeshMessageStatus.PENDING,
     val ttl: Int = DEFAULT_TTL,
-    val hopCount: Int = 0
+    val hopCount: Int = 0,
+    /**
+     * The transport used to send/receive this message.
+     * Null if unknown or not applicable.
+     */
+    val transportType: TransportType? = null
 ) {
     companion object {
         const val DEFAULT_TTL = 5
