@@ -19,10 +19,22 @@ object BleConstants {
     // Scanning settings
     const val SCAN_DURATION_MS = 10_000L
     const val SCAN_INTERVAL_MS = 15_000L
+    // Scan restart interval - increased to avoid disrupting GATT connections
+    const val SCAN_RESTART_INTERVAL_MS = 60_000L
+    // Minimum connections before restarting scan (avoid restart if we have neighbors)
+    const val SCAN_RESTART_MIN_CONNECTIONS = 2
+    // Time before a discovered device is considered stale (no advertisements)
+    const val DEVICE_STALE_TIME_MS = 30_000L
 
     // Connection settings
     const val CONNECTION_TIMEOUT_MS = 30_000L
     const val MTU_SIZE = 512
+    // Timeout for deferred handshake (if remote doesn't connect, we will)
+    const val HANDSHAKE_DEFER_TIMEOUT_MS = 10_000L
+    // Connection keep-alive ping interval
+    const val CONNECTION_KEEP_ALIVE_INTERVAL_MS = 25_000L
+    // Max retries for auto-reconnect before giving up
+    const val MAX_RECONNECT_ATTEMPTS = 5
 
     // Mesh settings
     const val DEFAULT_TTL = 5

@@ -27,12 +27,17 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -76,6 +81,10 @@ class BleMeshService(
     private val _advertisingState = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
     val advertisingState: SharedFlow<Boolean> = _advertisingState.asSharedFlow()
 
+    // StateFlow for external observers to track advertising state
+    private val _advertisingStateAsState = MutableStateFlow(false)
+    val advertisingStateAsStateFlow: StateFlow<Boolean> = _advertisingStateAsState.asStateFlow()
+
     private val _receivedData = MutableSharedFlow<ReceivedPacket>(extraBufferCapacity = 64)
     val receivedData: SharedFlow<ReceivedPacket> = _receivedData.asSharedFlow()
 
@@ -90,6 +99,16 @@ class BleMeshService(
     // ✅ FIX #1: Мапа для колбэков уведомлений (асинхронная обработка writeDescriptor)
     private val pendingNotificationCallbacks = ConcurrentHashMap<String, (Boolean) -> Unit>()
 
+    // FIX #5: Connection pool with keep-alive and auto-reconnect
+    private val reconnectAttempts = ConcurrentHashMap<String, Int>()
+    private var keepAliveJob: kotlinx.coroutines.Job? = null
+
+    // FIX #1: Per-device connection mutex to prevent concurrent connection attempts
+    private val connectionMutexes = ConcurrentHashMap<String, Mutex>()
+
+    // FIX #4: Track connection attempts in progress to prevent duplicates
+    private val connectionInProgress = ConcurrentHashMap<String, AtomicBoolean>()
+
     data class GattConnection(
         val gatt: BluetoothGatt,
         val dataCharacteristic: BluetoothGattCharacteristic? = null,
@@ -98,8 +117,20 @@ class BleMeshService(
         var notificationsEnabled: Boolean = false,
         // ✅ FIX #2: Флаги для защиты от дублирования колбэков
         var isMtuRequested: Boolean = false,
-        var isServicesDiscovered: Boolean = false
-    )
+        var isServicesDiscovered: Boolean = false,
+        // FIX #4: Track if service discovery is in progress
+        var isDiscoveryInProgress: Boolean = false,
+        // FIX #5: Track last activity time for health monitoring
+        var lastActivityTime: Long = System.currentTimeMillis()
+    ) {
+        fun touch() {
+            lastActivityTime = System.currentTimeMillis()
+        }
+        
+        fun isStale(timeoutMs: Long = BleConstants.CONNECTION_KEEP_ALIVE_INTERVAL_MS * 2): Boolean {
+            return System.currentTimeMillis() - lastActivityTime > timeoutMs
+        }
+    }
 
     data class ReceivedPacket(
         val packetId: String,
@@ -156,6 +187,8 @@ class BleMeshService(
                 gattServer?.addService(createMeshService())
                 Timber.i("GATT server started with mesh service")
                 startAdvertising()
+                // FIX #5: Start keep-alive job for connection pool health monitoring
+                startKeepAliveJob()
                 trySend(true)
             } catch (e: SecurityException) {
                 Timber.e(e, "Missing BLE permissions for starting service")
@@ -168,6 +201,75 @@ class BleMeshService(
         awaitClose {
             serviceScope.launch { stopService() }
         }
+    }
+
+    // FIX #5: Keep-alive job that monitors and maintains connection health
+    private fun startKeepAliveJob() {
+        keepAliveJob?.cancel()
+        keepAliveJob = serviceScope.launch {
+            while (true) {
+                delay(BleConstants.CONNECTION_KEEP_ALIVE_INTERVAL_MS)
+                checkConnectionHealth()
+            }
+        }
+    }
+
+    /**
+     * FIX #5: Check all cached connections for staleness and attempt reconnection.
+     * Also cleans up dead connections to free resources.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun checkConnectionHealth() {
+        val staleAddresses = mutableListOf<String>()
+        
+        for ((address, connection) in gattCache) {
+            if (connection.isStale()) {
+                Timber.w("Stale connection detected: $address (last activity: ${System.currentTimeMillis() - connection.lastActivityTime}ms ago)")
+                staleAddresses.add(address)
+            }
+        }
+        
+        // FIX #5: Instead of immediately removing stale connections, try to refresh them first
+        for (address in staleAddresses) {
+            val connection = gattCache[address]
+            if (connection != null && connectedDevices.contains(address)) {
+                // Connection is in connectedDevices but stale - try to refresh by re-discovering services
+                Timber.d("Attempting to refresh stale connection: $address")
+                try {
+                    connection.gatt.discoverServices()
+                    connection.touch() // Update activity time
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to refresh stale connection: $address")
+                    // Only close if refresh fails
+                    gattCache.remove(address)
+                    connectedDevices.remove(address)
+                    try { 
+                        connection.gatt.disconnect()
+                        connection.gatt.close() 
+                    } catch (e: Exception) { 
+                        Timber.w(e, "Error closing stale connection") 
+                    }
+                    connectionSemaphore.release()
+                    _connectionState.emit(ConnectionState.Disconnected(address))
+                }
+            } else {
+                // Connection is not in connectedDevices - safe to remove
+                Timber.d("Removing dead connection: $address")
+                gattCache[address]?.let { conn ->
+                    try { 
+                        conn.gatt.disconnect()
+                        conn.gatt.close() 
+                    } catch (e: Exception) { 
+                        Timber.w(e, "Error closing stale connection") 
+                    }
+                }
+                gattCache.remove(address)
+                connectionSemaphore.release()
+                _connectionState.emit(ConnectionState.Disconnected(address))
+            }
+        }
+        
+        // Note: Reconnection is handled by BleManager when devices are discovered
     }
 
     private fun createMeshService(): BluetoothGattService {
@@ -225,6 +327,7 @@ class BleMeshService(
             }
         }
 
+        @SuppressLint("MissingPermission")
         override fun onCharacteristicWriteRequest(
             device: android.bluetooth.BluetoothDevice,
             requestId: Int,
@@ -296,27 +399,33 @@ class BleMeshService(
         return withContext(Dispatchers.IO) {
             Timber.d(">>> sendData to $deviceAddress: ${data.size} bytes")
 
-            val cachedConnection = gattCache[deviceAddress]
-            Timber.d("Cached connection for $deviceAddress: ${if (cachedConnection != null) "FOUND (connected=${cachedConnection.isConnected})" else "NOT FOUND"}")
-            Timber.d("Connected devices set: $connectedDevices")
+            // FIX #1: Get or create per-device mutex
+            val mutex = connectionMutexes.computeIfAbsent(deviceAddress) { Mutex() }
 
-            if (cachedConnection != null && cachedConnection.isConnected) {
-                Timber.d("Using cached GATT connection for $deviceAddress")
-                val result = writeViaCachedGatt(deviceAddress, cachedConnection, data)
-                Timber.d("Cached write result for $deviceAddress: $result")
-                return@withContext result
+            // FIX #1: Use mutex to prevent concurrent connection attempts
+            mutex.withLock {
+                val cachedConnection = gattCache[deviceAddress]
+                Timber.d("Cached connection for $deviceAddress: ${if (cachedConnection != null) "FOUND (connected=${cachedConnection.isConnected})" else "NOT FOUND"}")
+                Timber.d("Connected devices set: $connectedDevices")
+
+                if (cachedConnection != null && cachedConnection.isConnected && cachedConnection.dataCharacteristic != null) {
+                    Timber.d("Using cached GATT connection for $deviceAddress")
+                    val result = writeViaCachedGatt(deviceAddress, cachedConnection, data)
+                    Timber.d("Cached write result for $deviceAddress: $result")
+                    return@withContext result
+                }
+
+                if (cachedConnection != null) {
+                    Timber.w("Removing stale cached connection for $deviceAddress")
+                    gattCache.remove(deviceAddress)
+                    try { cachedConnection.gatt.close() } catch (e: Exception) { Timber.w(e, "Error closing stale connection") }
+                }
+
+                Timber.d("Falling back to new connection for $deviceAddress")
+                val result = writeViaNewConnection(deviceAddress, data)
+                Timber.d("New connection write result for $deviceAddress: $result")
+                result
             }
-
-            if (cachedConnection != null) {
-                Timber.w("Removing stale cached connection for $deviceAddress")
-                gattCache.remove(deviceAddress)
-                try { cachedConnection.gatt.close() } catch (e: Exception) { Timber.w(e, "Error closing stale connection") }
-            }
-
-            Timber.d("Falling back to new connection for $deviceAddress")
-            val result = writeViaNewConnection(deviceAddress, data)
-            Timber.d("New connection write result for $deviceAddress: $result")
-            result
         }
     }
 
@@ -331,6 +440,8 @@ class BleMeshService(
             }
             characteristic.value = data
             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            // FIX #5: Update last activity time before write
+            connection.touch()
             val success = connection.gatt.writeCharacteristic(characteristic)
             if (!success) {
                 Timber.w("Cached write returned false for $deviceAddress")
@@ -351,21 +462,45 @@ class BleMeshService(
         val device = try { bluetoothAdapter?.getRemoteDevice(deviceAddress) }
         catch (e: IllegalArgumentException) { Timber.e("Invalid address: $deviceAddress"); return false } ?: return false
 
-        repeat(2) { attempt ->
-            Timber.d("Connection attempt ${attempt + 1}/2 for $deviceAddress")
-            val result = withTimeoutOrNull(15_000) { connectAndWrite(device, deviceAddress, data) }
-            if (result != null) return result
-            if (result == false) {
-                Timber.w("Write failed for $deviceAddress (attempt $attempt)")
-                // ✅ Небольшая пауза перед повторной попыткой
-                delay(1000)
-            } else {
-                Timber.w("Write timed out for $deviceAddress (attempt $attempt)")
+        // FIX #4: Check if connection is already in progress
+        val inProgress = connectionInProgress.computeIfAbsent(deviceAddress) { AtomicBoolean(false) }
+        if (!inProgress.compareAndSet(false, true)) {
+            Timber.w("Connection already in progress for $deviceAddress, waiting...")
+            // Wait for the other connection attempt to finish
+            repeat(10) {
                 delay(500)
+                if (!connectionInProgress.containsKey(deviceAddress)) {
+                    // doALittleWet
+                }
+            }
+            // Check cache again after waiting
+            val cachedConnection = gattCache[deviceAddress]
+            if (cachedConnection != null && cachedConnection.isConnected) {
+                return writeViaCachedGatt(deviceAddress, cachedConnection, data)
             }
         }
-        Timber.e("All attempts failed for $deviceAddress")
-        return false
+
+        try {
+            repeat(2) { attempt ->
+                Timber.d("Connection attempt ${attempt + 1}/2 for $deviceAddress")
+                // FIX #3: Increased timeout to 20s for slower devices
+                val result = withTimeoutOrNull(20_000) { connectAndWrite(device, deviceAddress, data) }
+                if (result != null) return result
+                if (result == false) {
+                    Timber.w("Write failed for $deviceAddress (attempt $attempt)")
+                    // FIX #3: Increased retry delay, especially for error 133
+                    delay(2000)
+                } else {
+                    Timber.w("Write timed out for $deviceAddress (attempt $attempt)")
+                    delay(1000)
+                }
+            }
+            Timber.e("All attempts failed for $deviceAddress")
+            return false
+        } finally {
+            // FIX #4: Clear in-progress flag
+            connectionInProgress.remove(deviceAddress)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -386,12 +521,16 @@ class BleMeshService(
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                    // ✅ FIX #5: Update last activity time on connection
+                    gattCache[deviceAddress]?.touch()
                     // ✅ Запросить высокий приоритет соединения для стабильности
                     gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                     try { gatt.requestMtu(BleConstants.MTU_SIZE) }
                     catch (e: SecurityException) { gatt.discoverServices() }
 
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    // ✅ FIX #5: Update last activity time on disconnect
+                    gattCache[deviceAddress]?.touch()
                     // ✅ Специальная обработка ошибки 133
                     if (status == 133) {
                         Timber.w("GATT_ERROR 133 for $deviceAddress — clearing cache and retrying")
@@ -401,6 +540,8 @@ class BleMeshService(
 
                     gatt.close()
                     connectionSemaphore.release()
+                    // FIX #4: Clear in-progress flag on disconnect
+                    connectionInProgress.remove(deviceAddress)
                     if (isCompleted.compareAndSet(false, true)) continuation.resume(false)
                 }
             }
@@ -411,25 +552,35 @@ class BleMeshService(
             }
 
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                // ✅ FIX #2: Защита от дублирования
+                // ✅ FIX #2 + #4: Защита от дублирования с AtomicBoolean
                 val conn = gattCache[deviceAddress]
-                if (conn?.isServicesDiscovered == true) return
-                conn?.let {
-                    gattCache[deviceAddress] = it.copy(isServicesDiscovered = true)
+                if (conn?.isServicesDiscovered == true) {
+                    Timber.d("Services already discovered for $deviceAddress, ignoring duplicate callback")
+                    return
                 }
 
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     val service = gatt.getService(BleConstants.MESH_SERVICE_UUID)
                     val characteristic = service?.getCharacteristic(BleConstants.MESH_DATA_CHARACTERISTIC_UUID)
                     if (characteristic != null) {
-                        enableNotifications(gatt, characteristic, deviceAddress) { notificationsEnabled ->
-                            val cccDescriptor = characteristic.getDescriptor(BleConstants.CCC_DESCRIPTOR_UUID)
-                            gattCache[deviceAddress] = GattConnection(
+                        // FIX #4: Mark discovery as in progress
+                        val updatedConn = conn?.copy(isDiscoveryInProgress = true, isServicesDiscovered = true)
+                            ?: GattConnection(
                                 gatt = gatt,
                                 dataCharacteristic = characteristic,
+                                isDiscoveryInProgress = true,
+                                isServicesDiscovered = true
+                            )
+                        gattCache[deviceAddress] = updatedConn
+
+                        enableNotifications(gatt, characteristic, deviceAddress) { notificationsEnabled ->
+                            val cccDescriptor = characteristic.getDescriptor(BleConstants.CCC_DESCRIPTOR_UUID)
+                            gattCache[deviceAddress] = updatedConn.copy(
                                 cccDescriptor = cccDescriptor,
                                 notificationsEnabled = notificationsEnabled,
-                                isServicesDiscovered = true
+                                isDiscoveryInProgress = false,
+                                isServicesDiscovered = true,
+                                lastActivityTime = System.currentTimeMillis()
                             )
                             characteristic.value = data
                             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
@@ -458,12 +609,17 @@ class BleMeshService(
             }
 
             override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                // FIX #5: Update last activity time on any write event
+                gattCache[deviceAddress]?.touch()
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     Timber.d("Write successful for $deviceAddress")
                     serviceScope.launch {
                         _sendConfirmations.emit(SendConfirmation("write_${System.currentTimeMillis()}", true, deviceAddress))
                     }
-                    if (isCompleted.compareAndSet(false, true)) continuation.resume(true)
+                    connectionSemaphore.release()
+                    if (isCompleted.compareAndSet(false, true)) {
+                        continuation.resume(true)
+                    }
                 } else {
                     Timber.e("Write failed for $deviceAddress, status=$status")
                     gatt.disconnect()
@@ -499,43 +655,56 @@ class BleMeshService(
         deviceAddress: String,
         onComplete: (Boolean) -> Unit
     ) {
+        val timeoutJob = serviceScope.launch {
+            delay(3500) // 3.5 секунды
+            Timber.w("enableNotifications TIMEOUT for $deviceAddress")
+            pendingNotificationCallbacks.remove(deviceAddress)?.invoke(false)
+        }
+
         try {
             Timber.d("Enabling notifications for $deviceAddress")
 
-            val notifySuccess = gatt.setCharacteristicNotification(characteristic, true)
-            Timber.d("setCharacteristicNotification($deviceAddress) = $notifySuccess")
-            if (!notifySuccess) { onComplete(false); return }
+            if (!gatt.setCharacteristicNotification(characteristic, true)) {
+                timeoutJob.cancel()
+                Timber.w("setCharacteristicNotification returned false for $deviceAddress")
+                onComplete(false)
+                return
+            }
 
-            var descriptor = characteristic.getDescriptor(BleConstants.CCC_DESCRIPTOR_UUID)
-            if (descriptor == null) {
-                Timber.w("CCC not found by UUID, scanning all descriptors...")
-                descriptor = characteristic.descriptors.find {
-                    it.uuid.toString().equals(BleConstants.CCC_DESCRIPTOR_UUID.toString(), ignoreCase = true)
+            val descriptor = characteristic.getDescriptor(BleConstants.CCC_DESCRIPTOR_UUID)
+                ?: characteristic.descriptors.find {
+                    it.uuid == BleConstants.CCC_DESCRIPTOR_UUID
                 }
-            }
+
             if (descriptor == null) {
-                Timber.e("CCC descriptor not found for $deviceAddress. Available: ${characteristic.descriptors.map { it.uuid }}")
-                onComplete(false); return
+                timeoutJob.cancel()
+                Timber.e("CCC descriptor not found for $deviceAddress")
+                onComplete(false)
+                return
             }
 
-            Timber.d("Found CCC: ${descriptor.uuid}, permissions: ${descriptor.permissions}")
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
 
-            // ✅ FIX #1: Сохраняем колбэк в мапу, НЕ вызываем onComplete здесь!
+            // Защита от race
             pendingNotificationCallbacks[deviceAddress] = onComplete
 
-            // ✅ FIX #4: Небольшая задержка для стабильности на MIUI
             serviceScope.launch {
-                delay(50) // 50ms пауза перед записью дескриптора
-                val writeSuccess = gatt.writeDescriptor(descriptor)
-                Timber.d("writeDescriptor($deviceAddress) returned: $writeSuccess")
-                if (!writeSuccess) {
-                    Timber.e("writeDescriptor returned false — это может быть причиной проблемы!")
-                    // Не вызываем onComplete здесь — ждём onDescriptorWrite
+                delay(100) // можно вынести в константу/функцию
+
+                val writeStarted = gatt.writeDescriptor(descriptor)
+                Timber.d("writeDescriptor started: $writeStarted for $deviceAddress")
+
+                if (!writeStarted) {
+                    timeoutJob.cancel()
+                    pendingNotificationCallbacks.remove(deviceAddress)?.invoke(false)
+                    onComplete(false)
                 }
+                // Если writeStarted == true — ждём onDescriptorWrite
             }
         } catch (e: Exception) {
-            Timber.e(e, "Failed to enable notifications for $deviceAddress")
+            timeoutJob.cancel()
+            Timber.e(e, "Exception in enableNotifications")
+            pendingNotificationCallbacks.remove(deviceAddress)?.invoke(false)
             onComplete(false)
         }
     }
@@ -559,7 +728,9 @@ class BleMeshService(
                                     gatt = gatt,
                                     dataCharacteristic = characteristic,
                                     cccDescriptor = cccDescriptor,
-                                    notificationsEnabled = notificationsEnabled
+                                    notificationsEnabled = notificationsEnabled,
+                                    isServicesDiscovered = true,
+                                    lastActivityTime = System.currentTimeMillis() // FIX #5: Initialize last activity time
                                 )
                                 Timber.d("Cached outgoing connection for $deviceAddress (notifications: $notificationsEnabled)")
                             }
@@ -658,6 +829,11 @@ class BleMeshService(
         assertNotMainThread("stopService")
         withContext(Dispatchers.IO) {
             try {
+                // FIX #5: Cancel keep-alive job
+                keepAliveJob?.cancel()
+                keepAliveJob = null
+                reconnectAttempts.clear()
+                
                 if (isAdvertising) {
                     advertiseCallback?.let { advertiser?.stopAdvertising(it) }
                     _advertisingState.tryEmit(false); isAdvertising = false; advertiseCallback = null

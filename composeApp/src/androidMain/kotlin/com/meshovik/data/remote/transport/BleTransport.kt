@@ -7,14 +7,16 @@ import com.meshovik.core.util.MeshUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 
@@ -118,37 +120,35 @@ class BleTransport(
     }
 
     /**
-     * Waits for a peer to be connected before sending.
-     * Times out after 5 seconds if the peer is not discovered.
+     * FIX #6: Waits for a peer to be connected using StateFlow<Set<String>>.
+     * Uses filter + firstOrNull for reliable connection detection.
+     * Times out after 8 seconds if the peer is not discovered (increased from 5s).
      */
     private suspend fun waitForConnection(peerId: String): TransportResult<Unit> {
-        // Check if already connected
-        val connectedNeighbors = bleManager.getConnectedNeighbors()
-        if (connectedNeighbors.contains(peerId)) {
+        // Быстрая проверка
+        if (bleManager.getConnectedNeighbors().contains(peerId)) {
+            Timber.d("Peer $peerId already connected")
             return TransportResult.success(Unit)
         }
 
-        Timber.d("Peer $peerId not connected, waiting for connection (timeout: 5s)")
+        Timber.d("Waiting for connection to $peerId (timeout: 12s)")
 
-        // Wait for the peer to appear in connected neighbors
-        val result = withTimeoutOrNull(5000) {
-            bleManager.connectedNeighborsCount.collectLatest { count ->
-                if (count > 0) {
-                    val neighbors = bleManager.getConnectedNeighbors()
-                    if (neighbors.contains(peerId)) {
-                        Timber.d("Peer $peerId is now connected")
-                        return@collectLatest
-                    }
-                }
+        return try {
+            withTimeout(12000) {
+                // Более правильный и эффективный способ
+                bleManager.connectedNeighbors
+                    .filter { it.contains(peerId) }
+                    .first()   // первый элемент, который удовлетворяет условию
+
+                Timber.d("Peer $peerId successfully connected")
+                TransportResult.success(Unit)
             }
-            false
-        }
-
-        return if (result == true) {
-            TransportResult.success(Unit)
-        } else {
-            Timber.w("Timeout waiting for connection to $peerId")
-            TransportResult.error("Timeout waiting for connection to $peerId")
+        } catch (e: TimeoutCancellationException) {
+            Timber.w("Timeout waiting for connection to $peerId after 12s")
+            TransportResult.error("Connection timeout for peer $peerId")
+        } catch (e: Exception) {
+            Timber.e(e, "Unexpected error while waiting for $peerId")
+            TransportResult.error("Error waiting for connection: ${e.message}")
         }
     }
 
@@ -206,31 +206,25 @@ class BleTransport(
     }
 
     /**
-     * Observes events from the underlying BleManager and forwards them.
-     * All collections run on Dispatchers.IO to prevent main thread blocking.
+     * FIX #7: Observes events from the underlying BleManager.
+     * Uses SharedFlow for individual message events (no index tracking needed).
      */
-    private var lastReceivedMessageCount = 0
-
     private fun observeBleEvents() {
+        // FIX: Use receivedMessageEvents SharedFlow instead of index-based list tracking
         scope.launch {
-            bleManager.receivedMessages.collectLatest { messages ->
-                // Only process new messages, skip already processed ones
-                for (i in lastReceivedMessageCount until messages.size) {
-                    val message = messages[i]
-                    val incoming = IncomingMessage(
-                        senderId = message.senderId,
-                        payload = message.content.toByteArray(Charsets.UTF_8),
-                        transportType = TransportType.BLE
-                    )
-                    _incomingMessages.emit(incoming)
-                    Timber.d("Incoming BLE message from ${message.senderId}")
-                }
-                lastReceivedMessageCount = messages.size
+            bleManager.receivedMessageEvents.collect { message ->
+                val incoming = IncomingMessage(
+                    senderId = message.senderId,
+                    payload = message.content.toByteArray(Charsets.UTF_8),
+                    transportType = TransportType.BLE
+                )
+                _incomingMessages.emit(incoming)
+                Timber.d("Incoming BLE message from ${message.senderId}")
             }
         }
 
         scope.launch {
-            bleManager.discoveredDevices.collectLatest { devices ->
+            bleManager.discoveredDevices.collect { devices ->
                 for (device in devices) {
                     if (device.isOnline) {
                         _connectionState.emit(TransportConnectionState.Connected(device.address))

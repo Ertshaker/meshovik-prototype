@@ -13,6 +13,9 @@ import com.meshovik.ble.model.BleConstants
 import com.meshovik.domain.entity.MeshDevice
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +39,10 @@ class BleScanner(
     }
 
     private var isScanning = false
+
+    // StateFlow for external observers to track scanning state
+    private val _isScanningState = MutableStateFlow(false)
+    val isScanningState: StateFlow<Boolean> = _isScanningState.asStateFlow()
 
     private var currentScanCallback: ScanCallback? = null
 
@@ -179,6 +186,7 @@ class BleScanner(
         try {
             scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
             isScanning = true
+            _isScanningState.value = true
             Timber.i("BLE scan started with filter for mesh service UUID")
         } catch (e: SecurityException) {
             Timber.e(e, "Missing BLE permissions")
@@ -192,6 +200,7 @@ class BleScanner(
             try {
                 scanner.stopScan(scanCallback)
                 isScanning = false
+                _isScanningState.value = false
                 Timber.i("BLE scan stopped")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to stop BLE scan")
@@ -218,6 +227,7 @@ class BleScanner(
 
         currentScanCallback = null
         isScanning = false
+        _isScanningState.value = false
         // Clean old entries from seenDevices (older than 30 seconds)
         val now = System.currentTimeMillis()
         seenDevices.entries.removeAll { (_, timestamp) ->
