@@ -14,5 +14,5 @@ val androidModule = module {
     single { BleManager(androidContext()) }
 
     // ViewModel
-    viewModel { MeshViewModel(get(), get()) }
+    viewModel { MeshViewModel(get(), get(), get(), get()) }
 }

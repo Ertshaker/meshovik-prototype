@@ -2,13 +2,19 @@ package com.meshovik.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.meshovik.BleAdvertiser
+import com.meshovik.BleDevice
+import com.meshovik.BleScanner
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 /**
  * Main ViewModel for the mesh messenger.
@@ -16,12 +22,20 @@ import timber.log.Timber
  */
 class MeshViewModel(
     private val bleManager: BleManager,
-    private val meshRepository: MeshRepository
+    private val meshRepository: MeshRepository,
+    private val scanner: BleScanner,
+    private val advertiser: BleAdvertiser
 ) : ViewModel() {
-
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // UI State
     private val _uiState = MutableStateFlow(MeshUiState())
     val uiState: StateFlow<MeshUiState> = _uiState.asStateFlow()
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning
+
+    private var device: BleDevice? = null
+    private var scanJob: Job? = null
+    private var observeJob: Job? = null
 
     // Events
     private val _events = MutableSharedFlow<MeshEvent>()
@@ -114,7 +128,15 @@ class MeshViewModel(
      * Starts scanning for nearby devices.
      */
     fun startScanning() {
-        bleManager.startScanning()
+        if (_isScanning.value) return
+
+        _isScanning.value = true
+
+        scanJob = scope.launch {
+            scanner.scan().collect { adv ->
+                bleManager.discoveredDevices.update { it + adv }
+            }
+        }
     }
 
     /**
