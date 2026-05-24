@@ -1,9 +1,9 @@
 package com.meshovik.domain.entity
 
-import kotlinx.datetime.Instant
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
-import kotlin.time.Clock
 
 /**
  * Type of mesh message.
@@ -28,7 +28,7 @@ data class MeshMessage(
     val type: MessageType = MessageType.TEXT,
 
     @Contextual
-    val timestamp: kotlin.time.Instant = Clock.System.now(),
+    val timestamp: Instant = Clock.System.now(),
     val status: MeshMessageStatus = MeshMessageStatus.PENDING,
     val ttl: Int = DEFAULT_TTL,
     val hopCount: Int = 0

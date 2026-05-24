@@ -1,6 +1,7 @@
 package com.meshovik
 
 import android.app.Application
+import android.content.Context
 import com.meshovik.BuildConfig
 import com.meshovik.di.androidModule
 import com.meshovik.di.commonModule
@@ -15,8 +16,27 @@ import timber.log.Timber
  * Initializes Koin DI and Timber logging.
  */
 class MeshovikApplication : Application() {
+
+    companion object {
+        /**
+         * Global access to application context for BLE components.
+         */
+        @Volatile
+        lateinit var instance: MeshovikApplication
+            private set
+
+        val context: Context
+            get() {
+                if (!::instance.isInitialized) {
+                    throw IllegalStateException("MeshovikApplication has not been initialized yet")
+                }
+                return instance
+            }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
 
         // Initialize Timber for logging
         if (BuildConfig.DEBUG) {

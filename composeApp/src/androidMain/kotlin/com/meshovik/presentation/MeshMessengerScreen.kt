@@ -10,6 +10,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.juul.kable.ExperimentalApi
+import com.juul.kable.Peripheral
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
@@ -25,7 +27,7 @@ fun MeshMessengerScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var messageText by remember { mutableStateOf("") }
-    var selectedDevice by remember { mutableStateOf<MeshDevice?>(null) }
+    var selectedDevice by remember { mutableStateOf<Peripheral?>(null) }
 
     // Handle events
     LaunchedEffect(Unit) {
@@ -96,7 +98,7 @@ fun MeshMessengerScreen(
                 onTextChange = { messageText = it },
                 onSend = {
                     if (selectedDevice != null) {
-                        viewModel.sendMessage(selectedDevice!!.address, messageText)
+                        viewModel.sendMessage(selectedDevice!!.identifier, messageText)
                     } else {
                         viewModel.broadcastMessage(messageText)
                     }
@@ -157,9 +159,9 @@ private fun StatusCard(
 
 @Composable
 private fun DeviceList(
-    devices: List<MeshDevice>,
-    selectedDevice: MeshDevice?,
-    onDeviceSelected: (MeshDevice) -> Unit
+    devices: List<Peripheral>,
+    selectedDevice: Peripheral?,
+    onDeviceSelected: (Peripheral) -> Unit
 ) {
     if (devices.isEmpty()) {
         Text(
@@ -178,7 +180,7 @@ private fun DeviceList(
             items(devices) { device ->
                 DeviceItem(
                     device = device,
-                    isSelected = selectedDevice?.address == device.address,
+                    isSelected = selectedDevice?.identifier == device.identifier,
                     onClick = { onDeviceSelected(device) }
                 )
             }
@@ -186,9 +188,10 @@ private fun DeviceList(
     }
 }
 
+@OptIn(ExperimentalApi::class)
 @Composable
 private fun DeviceItem(
-    device: MeshDevice,
+    device: Peripheral,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -207,18 +210,13 @@ private fun DeviceItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(device.name, style = MaterialTheme.typography.bodyLarge)
+                Text(device.name ?: "dsdas", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${device.address} • RSSI: ${device.rssi}",
+                    "${device.identifier}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(
-                MeshUtils.formatTimestamp(device.lastSeen),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -282,12 +280,13 @@ private fun MessageItem(message: MeshMessage) {
     }
 }
 
+@OptIn(ExperimentalApi::class)
 @Composable
 private fun MessageInput(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
-    selectedDevice: MeshDevice?,
+    selectedDevice: Peripheral?,
     enabled: Boolean
 ) {
     Row(

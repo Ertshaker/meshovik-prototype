@@ -1,20 +1,19 @@
-package com.meshovik.ble.model
-
-import java.util.UUID
+package com.meshovik.ble
 
 /**
  * BLE Mesh constants including custom GATT service and characteristic UUIDs.
+ * UUIDs are stored as strings for multiplatform compatibility.
  */
 object BleConstants {
     // Custom GATT Service UUID for Meshovik Mesh Network
-    val MESH_SERVICE_UUID: UUID = UUID.fromString("A1B2C3D4-E5F6-7890-A1B2-C3D4E5F67890")
+    const val MESH_SERVICE_UUID = "A1B2C3D4-E5F6-7890-A1B2-C3D4E5F67890"
 
     // Characteristic UUIDs
-    val MESH_DATA_CHARACTERISTIC_UUID: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567891")
-    val MESH_CONTROL_CHARACTERISTIC_UUID: UUID = UUID.fromString("a1b2c3d4-e5f6-7890-abcd-ef1234567892")
+    const val MESH_DATA_CHARACTERISTIC_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    const val MESH_CONTROL_CHARACTERISTIC_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
 
     // Client Characteristic Configuration Descriptor UUID
-    val CCC_DESCRIPTOR_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+    const val CCC_DESCRIPTOR_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 
     // Scanning settings
     const val SCAN_DURATION_MS = 10_000L

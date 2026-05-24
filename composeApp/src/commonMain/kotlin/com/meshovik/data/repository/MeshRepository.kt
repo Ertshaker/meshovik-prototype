@@ -1,5 +1,6 @@
 package com.meshovik.data.repository
 
+import com.juul.kable.Peripheral
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import kotlinx.coroutines.flow.Flow
@@ -13,8 +14,8 @@ import kotlinx.coroutines.flow.update
  * Acts as the single source of truth for mesh network data.
  */
 class MeshRepository {
-    private val _devices = MutableStateFlow<List<MeshDevice>>(emptyList())
-    val devices: StateFlow<List<MeshDevice>> = _devices.asStateFlow()
+    private val _devices = MutableStateFlow<List<Peripheral>>(emptyList())
+    val devices: StateFlow<List<Peripheral>> = _devices.asStateFlow()
 
     private val _messages = MutableStateFlow<List<MeshMessage>>(emptyList())
     val messages: StateFlow<List<MeshMessage>> = _messages.asStateFlow()
@@ -25,9 +26,9 @@ class MeshRepository {
     /**
      * Updates or adds a discovered device.
      */
-    fun updateDevice(device: MeshDevice) {
+    fun updateDevice(device: Peripheral) {
         _devices.update { devices ->
-            val existingIndex = devices.indexOfFirst { it.id == device.id }
+            val existingIndex = devices.indexOfFirst { it.identifier == device.identifier }
             if (existingIndex >= 0) {
                 devices.toMutableList().apply {
                     this[existingIndex] = device
@@ -50,20 +51,6 @@ class MeshRepository {
      */
     fun addSentMessage(message: MeshMessage) {
         _sentMessages.update { it + message }
-    }
-
-    /**
-     * Gets a device by its ID.
-     */
-    fun getDevice(deviceId: String): MeshDevice? {
-        return _devices.value.find { it.id == deviceId }
-    }
-
-    /**
-     * Gets all online devices.
-     */
-    fun getOnlineDevices(): List<MeshDevice> {
-        return _devices.value.filter { it.isOnline }
     }
 
     /**

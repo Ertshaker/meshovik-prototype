@@ -1,11 +1,8 @@
 package com.meshovik.core.util
 
 import kotlin.time.Clock
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
-import kotlinx.datetime.Instant as KotlinxInstant  // alias чтобы не было конфликтов
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Utility functions for the mesh network.
@@ -23,20 +20,18 @@ object MeshUtils {
     }
 
     /**
-     * Formats kotlin.time.Instant to a human-readable time string (HH:mm:ss).
+     * Formats kotlinx.datetime.Instant to a human-readable time string (HH:mm:ss).
      */
-    fun formatTimestamp(instant: Instant): String {
+    fun formatTimestamp(instant: kotlin.time.Instant): String {
         if (instant == Instant.DISTANT_PAST) {
             return "--:--:--"
         }
 
-        // Конвертируем kotlin.time.Instant → kotlinx.datetime.Instant только для форматирования
-        val kotlinxInstant = KotlinxInstant.fromEpochMilliseconds(instant.toEpochMilliseconds())
-        val dateTime = kotlinxInstant.toLocalDateTime(TimeZone.currentSystemDefault())
+//        return "${dateTime.hour.toString().padStart(2, '0')}:" +
+//                "${dateTime.minute.toString().padStart(2, '0')}:" +
+//                "${dateTime.second.toString().padStart(2, '0')}"
 
-        return "${dateTime.hour.toString().padStart(2, '0')}:" +
-                "${dateTime.minute.toString().padStart(2, '0')}:" +
-                "${dateTime.second.toString().padStart(2, '0')}"
+        return instant.toString()
     }
 
     /**

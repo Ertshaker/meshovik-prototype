@@ -2,7 +2,9 @@ package com.meshovik.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.meshovik.ble.manager.BleManager
+import com.juul.kable.Peripheral
+import com.meshovik.ble.BleManager
+import com.meshovik.ble.ConnectionState
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
@@ -167,7 +169,7 @@ class MeshViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        bleManager.cleanup()
+        bleManager.destroy()
     }
 }
 
@@ -175,12 +177,12 @@ class MeshViewModel(
  * UI state for the mesh messenger.
  */
 data class MeshUiState(
-    val devices: List<MeshDevice> = emptyList(),
+    val devices: List<Peripheral> = emptyList(),
     val receivedMessages: List<MeshMessage> = emptyList(),
     val sentMessages: List<MeshMessage> = emptyList(),
     val isScanning: Boolean = false,
     val isAdvertising: Boolean = false,
-    val connectionStates: Map<String, com.meshovik.ble.service.BleMeshService.ConnectionState> = emptyMap(),
+    val connectionStates: Map<String, ConnectionState> = emptyMap(),
     val selectedDevice: MeshDevice? = null
 )
 
