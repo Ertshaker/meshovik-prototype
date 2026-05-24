@@ -1,20 +1,16 @@
 package com.meshovik.presentation
 
+import android.Manifest
+import androidx.annotation.RequiresPermission
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.meshovik.BleAdvertiser
-import com.meshovik.BleDevice
-import com.meshovik.BleScanner
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
 
 /**
  * Main ViewModel for the mesh messenger.
@@ -22,20 +18,12 @@ import kotlinx.coroutines.flow.*
  */
 class MeshViewModel(
     private val bleManager: BleManager,
-    private val meshRepository: MeshRepository,
-    private val scanner: BleScanner,
-    private val advertiser: BleAdvertiser
+    private val meshRepository: MeshRepository
 ) : ViewModel() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     // UI State
     private val _uiState = MutableStateFlow(MeshUiState())
     val uiState: StateFlow<MeshUiState> = _uiState.asStateFlow()
-    private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning
-
-    private var device: BleDevice? = null
-    private var scanJob: Job? = null
-    private var observeJob: Job? = null
 
     // Events
     private val _events = MutableSharedFlow<MeshEvent>()
@@ -103,6 +91,7 @@ class MeshViewModel(
     /**
      * Starts the mesh service (advertising + GATT server).
      */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun startMeshService() {
         viewModelScope.launch {
             bleManager.startMeshService().collect { success ->
@@ -120,6 +109,7 @@ class MeshViewModel(
     /**
      * Stops the mesh service.
      */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun stopMeshService() {
         bleManager.stopMeshService()
     }
@@ -128,15 +118,7 @@ class MeshViewModel(
      * Starts scanning for nearby devices.
      */
     fun startScanning() {
-        if (_isScanning.value) return
-
-        _isScanning.value = true
-
-        scanJob = scope.launch {
-            scanner.scan().collect { adv ->
-                bleManager.discoveredDevices.update { it + adv }
-            }
-        }
+        bleManager.startScanning()
     }
 
     /**
@@ -187,6 +169,7 @@ class MeshViewModel(
         return bleManager.getLocalAddress() to bleManager.getLocalName()
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun onCleared() {
         super.onCleared()
         bleManager.cleanup()
@@ -202,7 +185,7 @@ data class MeshUiState(
     val sentMessages: List<MeshMessage> = emptyList(),
     val isScanning: Boolean = false,
     val isAdvertising: Boolean = false,
-    val connectionStates: Map<String, com.meshovik.ble.service.BleMeshService.ConnectionState> = emptyMap(),
+    val connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState> = emptyMap(),
     val selectedDevice: MeshDevice? = null
 )
 

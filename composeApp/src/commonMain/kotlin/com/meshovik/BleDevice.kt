@@ -45,7 +45,7 @@ class BleDevice(
     }
 
     companion object {
-        const val SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab"
-        const val CHAR_UUID = "87654321-4321-4321-4321-ba0987654321"
+        const val SERVICE_UUID = "A1B2C3D4-E5F6-7890-A1B2-C3D4E5F67890"
+        const val CHAR_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
     }
 }

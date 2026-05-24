@@ -1,6 +1,4 @@
-package com
-
-import com.meshovik.BleDevice
+package com.meshovik
 
 class BleChunker(
     private val mtu: Int = 20
@@ -18,6 +16,7 @@ class BleChunker(
 
         return chunks
     }
+
     suspend fun BleDevice.writeChunked(data: ByteArray) {
         val chunker = BleChunker(mtu = 20)
 

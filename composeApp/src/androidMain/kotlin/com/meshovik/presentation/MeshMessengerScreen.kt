@@ -19,6 +19,7 @@ import org.koin.androidx.compose.koinViewModel
  * Main mesh messenger screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
 @Composable
 fun MeshMessengerScreen(
     viewModel: MeshViewModel = koinViewModel()
