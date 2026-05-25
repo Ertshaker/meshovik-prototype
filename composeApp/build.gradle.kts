@@ -53,6 +53,11 @@ kotlin {
 
             // Kotlinx DateTime
             implementation(libs.kotlinx.datetime)
+
+            // Voyager Navigation
+            implementation(libs.voyager.navigator)
+            implementation(libs.voyager.screen.model)
+            implementation(libs.voyager.transitions)
         }
 
         androidMain.dependencies {

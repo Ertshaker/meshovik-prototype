@@ -3,7 +3,6 @@ package com.meshovik.di
 import android.provider.Settings
 import com.meshovik.ble.BleCentral
 import com.meshovik.ble.BleManager
-import com.meshovik.ble.BlePeripheral
 import com.meshovik.ble.BleScanner
 import com.meshovik.presentation.MeshViewModel
 import org.koin.android.ext.koin.androidContext
@@ -26,7 +25,6 @@ val androidModule = module {
             androidContext().contentResolver,
             Settings.Secure.ANDROID_ID
         ) ?: "unknown"
-        BlePeripheral(deviceName = "Meshovik-${androidId.takeLast(4)}")
     }
 
     // BLE Manager - common orchestrator with stable device address

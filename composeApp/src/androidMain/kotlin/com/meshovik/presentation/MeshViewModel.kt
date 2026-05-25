@@ -16,10 +16,13 @@ import timber.log.Timber
  * Main ViewModel for the mesh messenger.
  * Coordinates BLE operations and UI state.
  */
-class MeshViewModel(
+public class MeshViewModel(
     private val bleManager: BleManager,
     private val meshRepository: MeshRepository
 ) : ViewModel() {
+
+    // Local device address for message filtering
+    private val localDeviceAddress: String = bleManager.getLocalAddress()
 
     // UI State
     private val _uiState = MutableStateFlow(MeshUiState())
@@ -33,6 +36,8 @@ class MeshViewModel(
         observeBleState()
         observeDevices()
         observeMessages()
+        // Initialize local device address
+        _uiState.update { it.copy(localDeviceAddress = bleManager.getLocalAddress()) }
     }
 
     /**
@@ -64,7 +69,10 @@ class MeshViewModel(
     private fun observeDevices() {
         viewModelScope.launch {
             bleManager.discoveredDevices.collect { devices ->
-                devices.forEach { meshRepository.updateDevice(it) }
+                devices.forEach { device ->
+                    meshRepository.updateDevice(device)
+                    meshRepository.updateChatFromDevice(device)
+                }
                 _uiState.update { it.copy(devices = devices) }
             }
         }
@@ -162,6 +170,13 @@ class MeshViewModel(
         }
     }
     /**
+     * Gets messages for a specific chat.
+     */
+    fun getMessagesForChat(chatId: String): List<MeshMessage> {
+        return meshRepository.getMessagesForChat(chatId, localDeviceAddress)
+    }
+
+    /**
      * Подключается к выбранному устройству
      */
     fun connectToDevice(device: MeshDevice) {
@@ -198,7 +213,8 @@ data class MeshUiState(
     val isScanning: Boolean = false,
     val isAdvertising: Boolean = false,
     val connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState> = emptyMap(),
-    val selectedDevice: MeshDevice? = null
+    val selectedDevice: MeshDevice? = null,
+    val localDeviceAddress: String = ""
 )
 
 /**

@@ -12,6 +12,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
+import cafe.adriel.voyager.navigator.Navigator
+import cafe.adriel.voyager.transitions.SlideTransition
+import com.meshovik.presentation.screens.ChatListScreen
+import org.koin.androidx.compose.koinViewModel
 import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
@@ -45,7 +49,7 @@ class MainActivity : ComponentActivity() {
         checkBluetoothEnabled()
 
         setContent {
-            MeshMessengerScreen()
+            MeshMessengerApp()
         }
     }
 
@@ -77,8 +81,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
+fun MeshMessengerApp(
+    viewModel: MeshViewModel = koinViewModel()
+) {
+    Navigator(ChatListScreen(viewModel)) { navigator ->
+        SlideTransition(navigator)
+    }
+}
+
 @Preview
 @Composable
 fun AppAndroidPreview() {
-    MeshMessengerScreen()
+    MeshMessengerApp()
 }
