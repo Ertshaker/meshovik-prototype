@@ -81,7 +81,11 @@ fun MeshMessengerScreen(
             DeviceList(
                 devices = uiState.devices,
                 selectedDevice = selectedDevice,
-                onDeviceSelected = { selectedDevice = it }
+                connectionStates = uiState.connectionStates,
+                onDeviceSelected = { device ->
+                    selectedDevice = device
+                    viewModel.connectToDevice(device)   // ← главное изменение
+                }
             )
 
             // Messages
@@ -160,15 +164,11 @@ private fun StatusCard(
 private fun DeviceList(
     devices: List<MeshDevice>,
     selectedDevice: MeshDevice?,
-    onDeviceSelected: (MeshDevice) -> Unit
+    onDeviceSelected: (MeshDevice) -> Unit,
+    connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState>  // добавь
 ) {
     if (devices.isEmpty()) {
-        Text(
-            "No devices found. Start scanning to discover nearby devices.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
+        Text("No devices found...", style = MaterialTheme.typography.bodyMedium)
     } else {
         LazyColumn(
             modifier = Modifier
@@ -180,6 +180,7 @@ private fun DeviceList(
                 DeviceItem(
                     device = device,
                     isSelected = selectedDevice?.address == device.address,
+                    connectionState = connectionStates[device.address],
                     onClick = { onDeviceSelected(device) }
                 )
             }
@@ -191,13 +192,15 @@ private fun DeviceList(
 private fun DeviceItem(
     device: MeshDevice,
     isSelected: Boolean,
+    connectionState: com.meshovik.ble.manager.BleManager.ConnectionState?,
     onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface
         )
     ) {
         Row(
@@ -210,16 +213,19 @@ private fun DeviceItem(
             Column {
                 Text(device.name, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${device.address} • RSSI: ${device.rssi}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "${device.address.take(8)}... • RSSI: ${device.rssi}",
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
-            Text(
-                MeshUtils.formatTimestamp(device.lastSeen),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+            // Статус подключения
+            when (connectionState) {
+                is com.meshovik.ble.manager.BleManager.ConnectionState.Connected ->
+                    Text("✅ Connected", color = Color.Green)
+                is com.meshovik.ble.manager.BleManager.ConnectionState.Connecting ->
+                    Text("Connecting...", color = Color.Yellow)
+                else -> Text("Tap to connect", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

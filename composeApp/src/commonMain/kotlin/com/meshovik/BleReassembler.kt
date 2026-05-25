@@ -3,33 +3,44 @@ package com.meshovik
 class BleReassembler {
 
     private var buffer = ByteArray(0)
-    private var expectedSize: Int? = null
 
     fun onChunk(chunk: ByteArray): ByteArray? {
         buffer += chunk
 
-        if (expectedSize == null && buffer.size >= 4) {
-            expectedSize = buffer.copyOfRange(0, 4)
-                .toInt()
-        }
+        // Ждём заголовок
+        if (buffer.size < 14) return null
 
-        val size = expectedSize ?: return null
+        val sizeBytes = buffer.copyOfRange(10, 14)
+        val payloadSize = bytesToInt(sizeBytes)
 
-        if (buffer.size >= size + 4) {
-            val message = buffer.copyOfRange(4, 4 + size)
+        val fullSize = 14 + payloadSize
 
-            buffer = buffer.copyOfRange(4 + size, buffer.size)
-            expectedSize = null
+        if (buffer.size < fullSize) return null
 
-            return message
-        }
+        val payload = buffer.copyOfRange(14, fullSize)
 
-        return null
+        // ❗ НЕ очищаем весь буфер — только обработанную часть
+        buffer = buffer.copyOfRange(fullSize, buffer.size)
+
+        return payload
     }
 
-    private fun ByteArray.toInt(): Int =
-        (this[0].toInt() shl 24) or
-                (this[1].toInt() shl 16) or
-                (this[2].toInt() shl 8) or
-                this[3].toInt()
+    fun reset() {
+        buffer = ByteArray(0)
+    }
+}
+fun intToBytes(value: Int): ByteArray {
+    return byteArrayOf(
+        ((value shr 24) and 0xFF).toByte(),
+        ((value shr 16) and 0xFF).toByte(),
+        ((value shr 8) and 0xFF).toByte(),
+        (value and 0xFF).toByte()
+    )
+}
+
+fun bytesToInt(bytes: ByteArray): Int {
+    return (bytes[0].toInt() and 0xFF shl 24) or
+            (bytes[1].toInt() and 0xFF shl 16) or
+            (bytes[2].toInt() and 0xFF shl 8) or
+            (bytes[3].toInt() and 0xFF)
 }

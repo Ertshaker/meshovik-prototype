@@ -15,7 +15,11 @@ class BleDevice(
     private val peripheral = Peripheral(advertisement)
 
     suspend fun connect() {
-        peripheral.connect()
+        try {
+            peripheral.connect()
+        } catch (e: Exception) {
+            throw e
+        }
     }
 
     suspend fun disconnect() {
@@ -24,14 +28,18 @@ class BleDevice(
 
     @OptIn(ExperimentalUuidApi::class)
     suspend fun write(data: ByteArray) {
-        peripheral.write(
-            characteristic = characteristicOf(
-                service = Uuid.parse(SERVICE_UUID),
-                characteristic = Uuid.parse(CHAR_UUID)
-            ),
-            data = data,
-            writeType = WriteType.WithResponse
-        )
+        try {
+            peripheral.write(
+                characteristic = characteristicOf(
+                    service = Uuid.parse(SERVICE_UUID),
+                    characteristic = Uuid.parse(CHAR_UUID)
+                ),
+                data = data,
+                writeType = WriteType.WithResponse
+            )
+        } catch (e: Exception) {
+            throw e
+        }
     }
 
     @OptIn(ExperimentalUuidApi::class)
@@ -45,7 +53,7 @@ class BleDevice(
     }
 
     companion object {
-        const val SERVICE_UUID = "A1B2C3D4-E5F6-7890-A1B2-C3D4E5F67890"
+        const val SERVICE_UUID = "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f67890"
         const val CHAR_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
     }
 }

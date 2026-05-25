@@ -161,14 +161,26 @@ class MeshViewModel(
             _events.emit(MeshEvent.MessageBroadcast(message))
         }
     }
+    /**
+     * Подключается к выбранному устройству
+     */
+    fun connectToDevice(device: MeshDevice) {
+        viewModelScope.launch {
+            val bleDevice = bleManager.connectToDevice(device.address)
 
+            if (bleDevice != null) {
+                _uiState.update { it.copy(selectedDevice = device) }
+            } else {
+                _events.emit(MeshEvent.Error("Не удалось подключиться к ${device.name}"))
+            }
+        }
+    }
     /**
      * Gets the local device info.
      */
     fun getLocalDeviceInfo(): Pair<String, String> {
         return bleManager.getLocalAddress() to bleManager.getLocalName()
     }
-
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun onCleared() {
         super.onCleared()
