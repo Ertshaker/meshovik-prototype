@@ -10,8 +10,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.juul.kable.ExperimentalApi
-import com.juul.kable.Peripheral
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
@@ -21,13 +19,14 @@ import org.koin.androidx.compose.koinViewModel
  * Main mesh messenger screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
 @Composable
 fun MeshMessengerScreen(
     viewModel: MeshViewModel = koinViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var messageText by remember { mutableStateOf("") }
-    var selectedDevice by remember { mutableStateOf<Peripheral?>(null) }
+    var selectedDevice by remember { mutableStateOf<MeshDevice?>(null) }
 
     // Handle events
     LaunchedEffect(Unit) {
@@ -82,7 +81,11 @@ fun MeshMessengerScreen(
             DeviceList(
                 devices = uiState.devices,
                 selectedDevice = selectedDevice,
-                onDeviceSelected = { selectedDevice = it }
+                connectionStates = uiState.connectionStates,
+                onDeviceSelected = { device ->
+                    selectedDevice = device
+                    viewModel.connectToDevice(device)   // ← главное изменение
+                }
             )
 
             // Messages
@@ -98,7 +101,7 @@ fun MeshMessengerScreen(
                 onTextChange = { messageText = it },
                 onSend = {
                     if (selectedDevice != null) {
-                        viewModel.sendMessage(selectedDevice!!.identifier, messageText)
+                        viewModel.sendMessage(selectedDevice!!.address, messageText)
                     } else {
                         viewModel.broadcastMessage(messageText)
                     }
@@ -159,17 +162,13 @@ private fun StatusCard(
 
 @Composable
 private fun DeviceList(
-    devices: List<Peripheral>,
-    selectedDevice: Peripheral?,
-    onDeviceSelected: (Peripheral) -> Unit
+    devices: List<MeshDevice>,
+    selectedDevice: MeshDevice?,
+    onDeviceSelected: (MeshDevice) -> Unit,
+    connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState>  // добавь
 ) {
     if (devices.isEmpty()) {
-        Text(
-            "No devices found. Start scanning to discover nearby devices.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
+        Text("No devices found...", style = MaterialTheme.typography.bodyMedium)
     } else {
         LazyColumn(
             modifier = Modifier
@@ -180,7 +179,8 @@ private fun DeviceList(
             items(devices) { device ->
                 DeviceItem(
                     device = device,
-                    isSelected = selectedDevice?.identifier == device.identifier,
+                    isSelected = selectedDevice?.address == device.address,
+                    connectionState = connectionStates[device.address],
                     onClick = { onDeviceSelected(device) }
                 )
             }
@@ -188,18 +188,19 @@ private fun DeviceList(
     }
 }
 
-@OptIn(ExperimentalApi::class)
 @Composable
 private fun DeviceItem(
-    device: Peripheral,
+    device: MeshDevice,
     isSelected: Boolean,
+    connectionState: com.meshovik.ble.manager.BleManager.ConnectionState?,
     onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface
         )
     ) {
         Row(
@@ -210,12 +211,20 @@ private fun DeviceItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(device.name ?: "dsdas", style = MaterialTheme.typography.bodyLarge)
+                Text(device.name, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "${device.identifier}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "${device.address.take(8)}... • RSSI: ${device.rssi}",
+                    style = MaterialTheme.typography.bodySmall
                 )
+            }
+
+            // Статус подключения
+            when (connectionState) {
+                is com.meshovik.ble.manager.BleManager.ConnectionState.Connected ->
+                    Text("✅ Connected", color = Color.Green)
+                is com.meshovik.ble.manager.BleManager.ConnectionState.Connecting ->
+                    Text("Connecting...", color = Color.Yellow)
+                else -> Text("Tap to connect", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -280,13 +289,12 @@ private fun MessageItem(message: MeshMessage) {
     }
 }
 
-@OptIn(ExperimentalApi::class)
 @Composable
 private fun MessageInput(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
-    selectedDevice: Peripheral?,
+    selectedDevice: MeshDevice?,
     enabled: Boolean
 ) {
     Row(

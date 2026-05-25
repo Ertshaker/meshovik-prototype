@@ -1,10 +1,10 @@
 package com.meshovik.presentation
 
+import android.Manifest
+import androidx.annotation.RequiresPermission
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.juul.kable.Peripheral
-import com.meshovik.ble.BleManager
-import com.meshovik.ble.ConnectionState
+import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
@@ -91,6 +91,7 @@ class MeshViewModel(
     /**
      * Starts the mesh service (advertising + GATT server).
      */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun startMeshService() {
         viewModelScope.launch {
             bleManager.startMeshService().collect { success ->
@@ -108,6 +109,7 @@ class MeshViewModel(
     /**
      * Stops the mesh service.
      */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun stopMeshService() {
         bleManager.stopMeshService()
     }
@@ -159,17 +161,30 @@ class MeshViewModel(
             _events.emit(MeshEvent.MessageBroadcast(message))
         }
     }
+    /**
+     * Подключается к выбранному устройству
+     */
+    fun connectToDevice(device: MeshDevice) {
+        viewModelScope.launch {
+            val bleDevice = bleManager.connectToDevice(device.address)
 
+            if (bleDevice != null) {
+                _uiState.update { it.copy(selectedDevice = device) }
+            } else {
+                _events.emit(MeshEvent.Error("Не удалось подключиться к ${device.name}"))
+            }
+        }
+    }
     /**
      * Gets the local device info.
      */
     fun getLocalDeviceInfo(): Pair<String, String> {
         return bleManager.getLocalAddress() to bleManager.getLocalName()
     }
-
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun onCleared() {
         super.onCleared()
-        bleManager.destroy()
+        bleManager.cleanup()
     }
 }
 
@@ -177,12 +192,12 @@ class MeshViewModel(
  * UI state for the mesh messenger.
  */
 data class MeshUiState(
-    val devices: List<Peripheral> = emptyList(),
+    val devices: List<MeshDevice> = emptyList(),
     val receivedMessages: List<MeshMessage> = emptyList(),
     val sentMessages: List<MeshMessage> = emptyList(),
     val isScanning: Boolean = false,
     val isAdvertising: Boolean = false,
-    val connectionStates: Map<String, ConnectionState> = emptyMap(),
+    val connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState> = emptyMap(),
     val selectedDevice: MeshDevice? = null
 )
 
