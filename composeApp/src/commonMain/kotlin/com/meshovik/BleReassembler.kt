@@ -2,31 +2,37 @@ package com.meshovik
 
 class BleReassembler {
 
-    private var buffer = ByteArray(0)
+    private val buffers = mutableMapOf<String, ByteArray>()
 
-    fun onChunk(chunk: ByteArray): ByteArray? {
-        buffer += chunk
+    fun onChunk(deviceId: String, chunk: ByteArray): ByteArray? {
+        val current = buffers[deviceId] ?: ByteArray(0)
+        val newBuffer = current + chunk
+        buffers[deviceId] = newBuffer
 
-        // Ждём заголовок
-        if (buffer.size < 14) return null
+        if (newBuffer.size < 14) return null
 
-        val sizeBytes = buffer.copyOfRange(10, 14)
+        val sizeBytes = newBuffer.copyOfRange(10, 14)
         val payloadSize = bytesToInt(sizeBytes)
+
+        // ❗ защита от мусора
+        if (payloadSize <= 0 || payloadSize > 10_000) {
+            buffers[deviceId] = ByteArray(0)
+            return null
+        }
 
         val fullSize = 14 + payloadSize
 
-        if (buffer.size < fullSize) return null
+        if (newBuffer.size < fullSize) return null
 
-        val payload = buffer.copyOfRange(14, fullSize)
+        val payload = newBuffer.copyOfRange(14, fullSize)
 
-        // ❗ НЕ очищаем весь буфер — только обработанную часть
-        buffer = buffer.copyOfRange(fullSize, buffer.size)
+        buffers[deviceId] = newBuffer.copyOfRange(fullSize, newBuffer.size)
 
         return payload
     }
 
-    fun reset() {
-        buffer = ByteArray(0)
+    fun reset(deviceId: String) {
+        buffers.remove(deviceId)
     }
 }
 fun intToBytes(value: Int): ByteArray {

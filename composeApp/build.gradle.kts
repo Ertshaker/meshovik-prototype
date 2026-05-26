@@ -41,7 +41,6 @@ kotlin {
             implementation(libs.koin.core)
             implementation(libs.koin.compose)
             implementation(libs.koin.compose.viewmodel)
-
             // Kable BLE
             implementation(libs.kable.core)
 
@@ -69,6 +68,11 @@ kotlin {
 
             // Timber logging
             implementation(libs.timber)
+
+            // Voyager Navigation
+            implementation(libs.voyager.navigator)
+            implementation(libs.voyager.screen.model)
+            implementation(libs.voyager.transitions)
         }
 
         commonTest.dependencies {

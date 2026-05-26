@@ -25,14 +25,13 @@ object MeshUtils {
     /**
      * Formats kotlin.time.Instant to a human-readable time string (HH:mm:ss).
      */
-    fun formatTimestamp(instant: Instant): String {
-        if (instant == Instant.DISTANT_PAST) {
-            return "--:--:--"
-        }
+    fun formatTimestamp(timestampMillis: Long): String {
+        if (timestampMillis <= 0) return "--:--:--"
 
-        // Конвертируем kotlin.time.Instant → kotlinx.datetime.Instant только для форматирования
-        val kotlinxInstant = KotlinxInstant.fromEpochMilliseconds(instant.toEpochMilliseconds())
-        val dateTime = kotlinxInstant.toLocalDateTime(TimeZone.currentSystemDefault())
+        val instant = Clock.System.now() // не нужно, просто конвертируем
+        // Лучше использовать kotlinx.datetime для форматирования
+        val kotlinxInstant = kotlinx.datetime.Instant.fromEpochMilliseconds(timestampMillis)
+        val dateTime = kotlinxInstant.toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
 
         return "${dateTime.hour.toString().padStart(2, '0')}:" +
                 "${dateTime.minute.toString().padStart(2, '0')}:" +

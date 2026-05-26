@@ -21,6 +21,9 @@ class MeshViewModel(
     private val meshRepository: MeshRepository
 ) : ViewModel() {
 
+    // Local device address for message filtering
+    private val localDeviceAddress: String = bleManager.getLocalAddress()
+
     // UI State
     private val _uiState = MutableStateFlow(MeshUiState())
     val uiState: StateFlow<MeshUiState> = _uiState.asStateFlow()
@@ -33,6 +36,8 @@ class MeshViewModel(
         observeBleState()
         observeDevices()
         observeMessages()
+        // Initialize local device address in UI state
+        _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
     }
 
     /**
@@ -64,7 +69,10 @@ class MeshViewModel(
     private fun observeDevices() {
         viewModelScope.launch {
             bleManager.discoveredDevices.collect { devices ->
-                devices.forEach { meshRepository.updateDevice(it) }
+                devices.forEach { device ->
+                    meshRepository.updateDevice(device)
+                    meshRepository.updateChatFromDevice(device)
+                }
                 _uiState.update { it.copy(devices = devices) }
             }
         }
@@ -73,16 +81,18 @@ class MeshViewModel(
     /**
      * Observes received messages from BLE manager.
      */
+    private val processedMessageIds = mutableSetOf<String>()
+
     private fun observeMessages() {
         viewModelScope.launch {
             bleManager.receivedMessages.collect { messages ->
-                messages.forEach { meshRepository.addReceivedMessage(it) }
-                _uiState.update { it.copy(receivedMessages = messages) }
-            }
-        }
-
-        viewModelScope.launch {
-            meshRepository.messages.collect { messages ->
+                // Добавляем только те, которых ещё нет
+                messages.forEach { message ->
+                    if (message.id !in processedMessageIds) {
+                        processedMessageIds.add(message.id)
+                        meshRepository.addReceivedMessage(message)
+                    }
+                }
                 _uiState.update { it.copy(receivedMessages = messages) }
             }
         }
@@ -161,6 +171,16 @@ class MeshViewModel(
             _events.emit(MeshEvent.MessageBroadcast(message))
         }
     }
+    fun getMessagesFlowForChat(chatId: String): StateFlow<List<MeshMessage>> {
+        return meshRepository.getMessagesFlowForChat(chatId, localDeviceAddress)
+    }
+    /**
+     * Gets messages for a specific chat.
+     */
+    fun getMessagesForChat(chatId: String): List<MeshMessage> {
+        return meshRepository.getMessagesForChat(chatId, localDeviceAddress)
+    }
+
     /**
      * Подключается к выбранному устройству
      */
@@ -198,7 +218,8 @@ data class MeshUiState(
     val isScanning: Boolean = false,
     val isAdvertising: Boolean = false,
     val connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState> = emptyMap(),
-    val selectedDevice: MeshDevice? = null
+    val selectedDevice: MeshDevice? = null,
+    val localDeviceAddress: String = ""
 )
 
 /**

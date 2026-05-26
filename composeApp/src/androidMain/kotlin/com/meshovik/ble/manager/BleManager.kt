@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import timber.log.Timber
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -97,7 +98,7 @@ class BleManager(
             bleGattServer.receivedData.collect { rawData ->
                 Timber.i("GATT Server received ${rawData.size} bytes")
 
-                val messageBytes = bleReassembler.onChunk(rawData)
+                val messageBytes = bleReassembler.onChunk("GATT_SERVER", rawData)
                 if (messageBytes != null) {
                     val parsedMessage = parseReceivedData(messageBytes)
                     if (parsedMessage != null) {
@@ -290,7 +291,7 @@ class BleManager(
         val job = scope.launch {
             try {
                 device.observe().collectLatest { chunk ->
-                    val message = bleReassembler.onChunk(chunk)
+                    val message = bleReassembler.onChunk("GATT_SERVER", chunk)
                     if (message != null) {
                         val parsedMessage = parseReceivedData(message)
                         if (parsedMessage != null) {
@@ -317,7 +318,7 @@ class BleManager(
             receiverId = targetAddress,
             content = content,
             type = MessageType.TEXT,
-            timestamp = Clock.System.now(),
+            timestamp = Clock.System.now().toEpochMilliseconds(),
             status = MeshMessageStatus.PENDING,
             ttl = 5,
             hopCount = 0
@@ -328,7 +329,7 @@ class BleManager(
                 packetId = messageId,
                 ttl = message.ttl,
                 hopCount = message.hopCount,
-                payload = content.toByteArray(Charsets.UTF_8)
+                payload = Json.encodeToString(message).encodeToByteArray()
             )
 
             val success = sendData(targetAddress, packetData)
@@ -353,7 +354,7 @@ class BleManager(
             receiverId = "BROADCAST",
             content = content,
             type = MessageType.FLOOD,
-            timestamp = Clock.System.now(),
+            timestamp = Clock.System.now().toEpochMilliseconds(),
             status = MeshMessageStatus.PENDING,
             ttl = 5,
             hopCount = 0
@@ -364,9 +365,8 @@ class BleManager(
                 packetId = messageId,
                 ttl = message.ttl,
                 hopCount = message.hopCount,
-                payload = content.toByteArray(Charsets.UTF_8)
+                payload = Json.encodeToString(message).encodeToByteArray()
             )
-
             // Send to all connected devices
             connectedDevices.keys.forEach { address ->
                 sendData(address, packetData)
@@ -431,20 +431,8 @@ class BleManager(
      */
     private fun parseReceivedData(data: ByteArray): MeshMessage? {
         return try {
-            val content = data.toString(Charsets.UTF_8).trim()
-            Timber.i("Parsing content: '$content'")
-
-            MeshMessage(
-                id = UUID.randomUUID().toString().take(8),
-                senderId = "unknown",
-                receiverId = localDeviceAddress,
-                content = content,
-                type = MessageType.TEXT,
-                timestamp = Clock.System.now(),
-                status = MeshMessageStatus.DELIVERED,
-                ttl = 0,
-                hopCount = 0
-            )
+            val json = data.decodeToString()
+            Json.decodeFromString<MeshMessage>(json)
         } catch (e: Exception) {
             Timber.e(e, "Failed to parse")
             null

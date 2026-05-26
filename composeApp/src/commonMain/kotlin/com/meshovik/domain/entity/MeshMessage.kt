@@ -28,7 +28,7 @@ data class MeshMessage(
     val type: MessageType = MessageType.TEXT,
 
     @Contextual
-    val timestamp: kotlin.time.Instant = Clock.System.now(),
+    val timestamp: Long = Clock.System.now().toEpochMilliseconds(),
     val status: MeshMessageStatus = MeshMessageStatus.PENDING,
     val ttl: Int = DEFAULT_TTL,
     val hopCount: Int = 0
