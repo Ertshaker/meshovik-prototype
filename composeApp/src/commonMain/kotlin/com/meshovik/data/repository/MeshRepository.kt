@@ -45,10 +45,14 @@ class MeshRepository {
 
     fun updateChatFromDevice(device: MeshDevice) {
         _chats.update { chats ->
-            val existingIndex = chats.indexOfFirst { it.id == device.address }
+            // Chat ID is meshId if known, otherwise BLE MAC address
+            val chatId = device.meshId.ifEmpty { device.address }
+            val existingIndex = chats.indexOfFirst { it.id == chatId || it.id == device.address }
             if (existingIndex >= 0) {
                 chats.toMutableList().apply {
                     this[existingIndex] = chats[existingIndex].copy(
+                        id = chatId,
+                        participantAddress = chatId,
                         participantName = device.name,
                         rssi = device.rssi
                     )
@@ -87,30 +91,24 @@ class MeshRepository {
     ): StateFlow<List<MeshMessage>> {
         val result = MutableStateFlow<List<MeshMessage>>(emptyList())
 
-        combine(_messages, _sentMessages, _chats) { messages, sent, chats ->
-            val chat = chats.find { it.id == chatId }
-                ?: if (chatId == "broadcast") Chat.createBroadcastChat()
-                else return@combine emptyList()
-
-            when (chat.type) {
-                ChatType.BROADCAST -> {
+        combine(_messages, _sentMessages) { messages, sent ->
+            when {
+                chatId == "broadcast" -> {
                     (messages.filter { it.receiverId == "BROADCAST" } +
                             sent.filter { it.receiverId == "BROADCAST" })
                 }
-                ChatType.DIRECT -> {
-                    val participant = chat.participantAddress ?: return@combine emptyList()
-                    (messages.filter {
-                        (it.senderId == participant && it.receiverId == localDeviceAddress) ||
-                                (it.senderId == localDeviceAddress && it.receiverId == participant)
-                    } +
-                            sent.filter {
-                                it.senderId == localDeviceAddress && it.receiverId == participant
-                            })
+                else -> {
+                    // Direct chat: messages between localDevice and chatId (participant's Mesh ID)
+                    val incoming = messages.filter { msg ->
+                        msg.senderId == chatId
+                    }
+                    val outgoing = sent.filter { msg ->
+                        msg.senderId == localDeviceAddress
+                    }
+                    incoming + outgoing
                 }
             }.sortedBy { it.timestamp }
-        }.onEach {
-            result.value = it
-        }.launchIn(repositoryScope)  // ← единый scope
+        }.onEach { result.value = it }.launchIn(repositoryScope)
 
         return result
     }
@@ -128,33 +126,27 @@ class MeshRepository {
     }
 
     fun addReceivedMessage(message: MeshMessage) {
-        _messages.update { messages ->
-            if (messages.any { it.id == message.id }) {
-                messages  // ← уже есть, не добавляем
-            } else {
-                messages + message
-            }
+        _messages.update { current ->
+            if (current.any { it.id == message.id }) current
+            else current + message
         }
-        if (message.receiverId == "BROADCAST") {
-            updateChatLastMessage("broadcast", message.content, message.timestamp)
-        } else {
-            updateChatLastMessage(message.senderId, message.content, message.timestamp)
-        }
+
+        val chatId = if (message.receiverId == "BROADCAST") "broadcast"
+        else message.senderId
+
+        updateChatLastMessage(chatId, message.content, message.timestamp)
     }
 
     fun addSentMessage(message: MeshMessage) {
-        _sentMessages.update { messages ->
-            if (messages.any { it.id == message.id }) {
-                messages
-            } else {
-                messages + message
-            }
+        _sentMessages.update { current ->
+            if (current.any { it.id == message.id }) current
+            else current + message
         }
-        if (message.receiverId == "BROADCAST") {
-            updateChatLastMessage("broadcast", message.content, message.timestamp)
-        } else {
-            updateChatLastMessage(message.receiverId, message.content, message.timestamp)
-        }
+
+        val chatId = if (message.receiverId == "BROADCAST") "broadcast"
+        else message.receiverId
+
+        updateChatLastMessage(chatId, message.content, message.timestamp)
     }
 
     fun clear() {

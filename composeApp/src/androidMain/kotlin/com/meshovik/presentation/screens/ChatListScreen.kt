@@ -28,6 +28,7 @@ object ChatListScreen : Screen {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
+    @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun Content() {
         val viewModel: MeshViewModel = koinViewModel()
         val navigator = LocalNavigator.currentOrThrow
@@ -36,7 +37,7 @@ object ChatListScreen : Screen {
         val scope = rememberCoroutineScope()
 
         // Start advertising and scanning on launch
-        LaunchedEffect(Unit) {
+        LaunchedEffect(Unit)  {
             viewModel.startMeshService()
             viewModel.startScanning()
         }
@@ -63,9 +64,12 @@ object ChatListScreen : Screen {
                                 navigator.push(BroadcastChatScreen)
                             }
                             ChatType.DIRECT -> {
-                                chat.participantAddress?.let { address ->
-                                    navigator.push(DirectChatScreen(address, chat.participantName))
-                                }
+                                navigator.push(
+                                    DirectChatScreen(
+                                        participantAddress = chat.id,           // используем chat.id (MeshID если есть)
+                                        participantName = chat.participantName
+                                    )
+                                )
                             }
                         }
                     },

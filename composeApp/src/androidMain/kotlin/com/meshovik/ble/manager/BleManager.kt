@@ -11,6 +11,7 @@ import com.meshovik.BleDevice
 import com.meshovik.BleGattServer
 import com.meshovik.BleReassembler
 import com.meshovik.BleScanner
+import com.meshovik.core.util.DeviceIdProvider
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -42,6 +44,8 @@ class BleManager(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private val deviceIdProvider = DeviceIdProvider(context)
+
     private val bleScanner = BleScanner(context)
     private val bleAdvertiser = BleAdvertiser(context)
     private val bleChunker = BleChunker(mtu = 20)
@@ -52,6 +56,10 @@ class BleManager(
     // Connected devices map: address -> BleDevice
     private val connectedDevices = mutableMapOf<String, BleDevice>()
     private val deviceObservationJobs = mutableMapOf<String, Job>()
+    // Mapping: BLE MAC address -> stable Mesh ID (populated when first message received)
+    private val bleToMeshIdMap = mutableMapOf<String, String>()
+    // Reverse mapping: Mesh ID -> BLE MAC address (for sending messages by Mesh ID)
+    private val meshIdToBleMap = mutableMapOf<String, String>()
 
     // State
     private val _discoveredDevices = MutableStateFlow<List<MeshDevice>>(emptyList())
@@ -88,8 +96,10 @@ class BleManager(
      * Initializes local device info.
      */
     private fun initializeLocalDeviceInfo() {
-        localDeviceAddress = "Skibidi${(1..10).random()}"
-        localDeviceName = "Meshovik Device"
+        localDeviceAddress = deviceIdProvider.getDeviceId()
+        localDeviceName = deviceIdProvider.getUserName()
+        // Broadcast our Mesh ID via Bluetooth device name so other devices learn it during scan
+        bleAdvertiser.setMeshId(localDeviceAddress)
         Timber.i("Local device: $localDeviceName ($localDeviceAddress)")
     }
 
@@ -102,15 +112,23 @@ class BleManager(
                 if (messageBytes != null) {
                     val parsedMessage = parseReceivedData(messageBytes)
                     if (parsedMessage != null) {
-                        _receivedMessages.update { current ->
-                            current + parsedMessage
-                        }
+                        handleReceivedMessage("GATT_SERVER", parsedMessage)   // или source address если есть
                         Timber.i("✅ Message added to receivedMessages: ${parsedMessage.content}")
                     }
                 }
             }
         }
     }
+
+    /**
+     * Returns the stable Mesh ID for a given BLE MAC address, or null if not yet known.
+     */
+    fun getMeshIdByBleAddress(bleAddress: String): String? = bleToMeshIdMap[bleAddress]
+
+    /**
+     * Returns all known BLE address → Mesh ID mappings.
+     */
+    fun getBleToMeshIdMap(): Map<String, String> = bleToMeshIdMap.toMap()
 
     /**
      * Observes advertising state changes.
@@ -180,34 +198,34 @@ class BleManager(
 
         _isScanning.value = true
         scanJob = scope.launch {
-            bleScanner.scan().collectLatest { advertisement ->
+            // Use collect (not collectLatest) so connectToDevice is not cancelled on each new advertisement
+            bleScanner.scan().collect { advertisement ->
                 val address = advertisement.identifier
                 Timber.d("BLE advertisement: ${advertisement.name ?: "Unknown"} ($address)")
                 
                 // Cache advertisement
                 advertisementsCache[address] = advertisement
                 
-                // Convert to MeshDevice
-                val device = advertisement.toMeshDevice()
-                
-                // Update discovered devices
+                // Update discovered devices, preserving existing meshId
                 _discoveredDevices.update { devices ->
                     val existingIndex = devices.indexOfFirst { it.address == address }
                     if (existingIndex >= 0) {
+                        // Update but keep the known meshId
+                        val existing = devices[existingIndex]
                         devices.toMutableList().apply {
-                            this[existingIndex] = device
+                            this[existingIndex] = advertisement.toMeshDevice().copy(meshId = existing.meshId)
                         }
                     } else {
-                        devices + device
+                        devices + advertisement.toMeshDevice()
                     }
                 }
 
-                // Auto-connect to discovered device
+                // Auto-connect to discovered device (launch separately so scan is not blocked)
                 if (!connectedDevices.containsKey(address) &&
-                    address != localDeviceAddress &&           // ← не коннектимся к себе
-                    !isConnecting(address)) {                  // ← добавь проверку
+                    address != localDeviceAddress &&
+                    !isConnecting(address)) {
 
-                    connectToDevice(advertisement)
+                    launch { connectToDevice(advertisement) }
                 }
             }
         }
@@ -217,14 +235,29 @@ class BleManager(
      * Converts Advertisement to MeshDevice.
      */
     private fun Advertisement.toMeshDevice(): MeshDevice {
+        // If the device name looks like a Mesh ID (starts with "Mesh"), use it as meshId
+        val advName = this.name ?: ""
+        val discoveredMeshId = if (advName.startsWith("Mesh") && advName.length == 12) advName else ""
+
+        // Also populate reverse mapping immediately if we learn the meshId from advertisement
+        if (discoveredMeshId.isNotEmpty()) {
+            val bleAddr = this.identifier
+            if (!bleToMeshIdMap.containsKey(bleAddr)) {
+                bleToMeshIdMap[bleAddr] = discoveredMeshId
+                meshIdToBleMap[discoveredMeshId] = bleAddr
+                Timber.i("Learned Mesh ID from advertisement: $bleAddr → $discoveredMeshId")
+            }
+        }
+
         return MeshDevice(
             id = this.identifier,
-            name = this.name ?: "Unknown",
+            name = advName.ifEmpty { "Unknown" },
             address = this.identifier,
             rssi = this.rssi ?: 0,
             lastSeen = Clock.System.now(),
             isOnline = true,
-            hopCount = 0
+            hopCount = 0,
+            meshId = discoveredMeshId
         )
     }
 
@@ -244,9 +277,12 @@ class BleManager(
     suspend fun connectToDevice(advertisement: Advertisement): BleDevice? {
         val address = advertisement.identifier
 
-        if (connectedDevices.containsKey(address) || connectingDevices.contains(address) || address == localDeviceAddress) {
-
+        if (connectedDevices.containsKey(address) || address == localDeviceAddress) {
             return connectedDevices[address]
+        }
+
+        if (connectingDevices.contains(address)) {
+            return null
         }
 
         connectingDevices.add(address)
@@ -261,9 +297,8 @@ class BleManager(
 
             _connectionStates.update { it + (address to ConnectionState.Connected(address)) }
 
-            // Start observing data from this device
-            startObservingDevice(device, address)
-            Timber.i("Successfully connected to: $address")
+            startObservingDevice(device, address)   // теперь безопасно
+            Timber.i("✅ Successfully connected and observing: $address")
 
             device
         } catch (e: Exception) {
@@ -288,6 +323,11 @@ class BleManager(
      * Starts observing data from a connected device.
      */
     private fun startObservingDevice(device: BleDevice, address: String) {
+        if (deviceObservationJobs.containsKey(address)) {
+            Timber.d("Already observing device $address")
+            return
+        }
+
         val job = scope.launch {
             try {
                 device.observe().collectLatest { chunk ->
@@ -295,8 +335,21 @@ class BleManager(
                     if (message != null) {
                         val parsedMessage = parseReceivedData(message)
                         if (parsedMessage != null) {
-                            _receivedMessages.update { it + parsedMessage }
-                            Timber.i("Message received: ${parsedMessage.id} from $address")
+                            // Learn the sender's Mesh ID from the message
+                            val senderMeshId = parsedMessage.senderId
+                            if (senderMeshId.isNotEmpty() && !bleToMeshIdMap.containsKey(address)) {
+                                bleToMeshIdMap[address] = senderMeshId
+                                meshIdToBleMap[senderMeshId] = address
+                                Timber.i("Learned Mesh ID: $address → $senderMeshId")
+                                // Update the MeshDevice with the discovered meshId
+                                _discoveredDevices.update { devices ->
+                                    devices.map { d ->
+                                        if (d.address == address) d.copy(meshId = senderMeshId) else d
+                                    }
+                                }
+                            }
+                            handleReceivedMessage(address, parsedMessage)
+                            Timber.i("Message received: ${parsedMessage.id} from $address (meshId=$senderMeshId)")
                         }
                     }
                 }
@@ -307,6 +360,26 @@ class BleManager(
         deviceObservationJobs[address] = job
     }
 
+    private fun handleReceivedMessage(sourceBleAddress: String, message: MeshMessage) {
+        var finalMessage = message
+
+        // Если senderId выглядит как MeshID — сохраняем маппинг
+        if (message.senderId.startsWith("Mesh") || message.senderId.length > 20) {
+            bleToMeshIdMap[sourceBleAddress] = message.senderId
+            meshIdToBleMap[message.senderId] = sourceBleAddress
+            Timber.i("Mapped: $sourceBleAddress <-> ${message.senderId}")
+        } else {
+            // Если пришёл BLE address — пробуем найти MeshID
+            val meshId = bleToMeshIdMap[sourceBleAddress]
+            if (meshId != null) {
+                finalMessage = message.copy(senderId = meshId)
+            }
+        }
+
+        _receivedMessages.update { it + finalMessage }
+        Timber.i("✅ Saved message: ${finalMessage.senderId} -> ${finalMessage.receiverId} | ${finalMessage.content}")
+    }
+
     /**
      * Sends a text message to a specific device.
      */
@@ -314,15 +387,18 @@ class BleManager(
         val messageId = UUID.randomUUID().toString().take(8)
         val message = MeshMessage(
             id = messageId,
-            senderId = localDeviceAddress,
-            receiverId = targetAddress,
+            senderId = localDeviceAddress,           // твой стабильный MeshID
+            receiverId = targetAddress,              // MeshID или BLE address — не важно, обработается
             content = content,
             type = MessageType.TEXT,
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            status = MeshMessageStatus.PENDING,
+            status = MeshMessageStatus.SENT,
             ttl = 5,
             hopCount = 0
         )
+
+        // Сохраняем сразу
+        _receivedMessages.update { it + message }
 
         scope.launch {
             val packetData = createMeshPacket(
@@ -332,12 +408,8 @@ class BleManager(
                 payload = Json.encodeToString(message).encodeToByteArray()
             )
 
-            val success = sendData(targetAddress, packetData)
-            if (success) {
-                Timber.i("Message sent: $messageId to $targetAddress")
-            } else {
-                Timber.e("Failed to send message: $messageId to $targetAddress")
-            }
+            val targetBle = meshIdToBleMap[targetAddress] ?: targetAddress
+            sendData(targetBle, packetData)
         }
 
         return message

@@ -19,6 +19,7 @@ actual class BleGattServer (
 
     private val serviceUuid = UUID.fromString(BleDevice.SERVICE_UUID)
     private val charUuid = UUID.fromString(BleDevice.CHAR_UUID)
+    private val cccdUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     actual fun start() {
@@ -34,6 +35,14 @@ actual class BleGattServer (
             BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_WRITE
         )
+
+        // CCCD (Client Characteristic Configuration Descriptor) is required by Kable for observe()
+        // Without it, Kable throws "Characteristic is missing config descriptor"
+        val cccd = BluetoothGattDescriptor(
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
+            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+        )
+        characteristic.addDescriptor(cccd)
 
         service.addCharacteristic(characteristic)
         gattServer?.addService(service)
@@ -59,10 +68,40 @@ actual class BleGattServer (
             offset: Int,
             value: ByteArray
         ) {
-            if (characteristic.uuid == charUuid) {
-                Timber.i("Received data from ${device.address}: ${value.size} bytes")
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+            if (characteristic.uuid == charUuid && value != null) {
+                Timber.i("Received ${value.size} bytes from ${device.address}")
+
+                gattServer?.sendResponse(
+                    device,
+                    requestId,
+                    BluetoothGatt.GATT_SUCCESS,
+                    offset,
+                    value
+                )
+
                 _receivedData.tryEmit(value)
+            }
+        }
+
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onDescriptorWriteRequest(
+            device: BluetoothDevice,
+            requestId: Int,
+            descriptor: BluetoothGattDescriptor,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray
+        ) {
+            if (descriptor.uuid == cccdUuid) {
+                gattServer?.sendResponse(
+                    device,
+                    requestId,
+                    BluetoothGatt.GATT_SUCCESS,
+                    offset,
+                    value
+                )
+                Timber.i("CCCD subscription handled for ${device.address}")
             }
         }
     }

@@ -33,3 +33,13 @@ in your IDE’s toolbar or open the [/iosApp](./iosApp) directory in Xcode and r
 ---
 
 Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+
+
+flowchart TB
+A[Presentation Layer\nCompose Multiplatform + Voyager]
+--> B[Domain Layer\nBusiness Logic + Encryption]
+B --> C[Application Layer\nMeshNetworkManager + Repositories]
+C --> D[Data Layer\nSQLDelight]
+C --> E[Hardware Abstraction Layer\nKable BLE]
+style A fill:#e3f2fd
+style D fill:#f3e5f5

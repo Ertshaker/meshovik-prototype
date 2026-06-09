@@ -21,6 +21,7 @@ actual class BleAdvertiser(
 
     private val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+    private var meshId: String = ""
 
     private val _advertisingState = MutableStateFlow(false)
     actual val advertisingState: Flow<Boolean> = _advertisingState.asStateFlow()
@@ -44,6 +45,21 @@ actual class BleAdvertiser(
                 else -> "UNKNOWN($errorCode)"
             }
             Timber.e("BLE advertising failed with error: $errorCode ($errorName)")
+        }
+    }
+
+    /**
+     * Sets the Mesh ID to advertise as the device name.
+     * Must be called before startAdvertising().
+     */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT])
+    fun setMeshId(id: String) {
+        meshId = id
+        // Set Bluetooth device name so scanners can read our Mesh ID from advertisement.name
+        try {
+            bluetoothAdapter?.name = id
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to set Bluetooth device name to Mesh ID")
         }
     }
 

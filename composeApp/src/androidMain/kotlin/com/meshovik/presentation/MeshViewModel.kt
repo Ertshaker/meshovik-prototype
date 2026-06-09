@@ -32,6 +32,9 @@ class MeshViewModel(
     private val _events = MutableSharedFlow<MeshEvent>()
     val events: SharedFlow<MeshEvent> = _events.asSharedFlow()
 
+    // Deduplicate received messages (must be declared BEFORE init)
+    private val processedMessageIds = mutableSetOf<String>()
+
     init {
         observeBleState()
         observeDevices()
@@ -69,11 +72,13 @@ class MeshViewModel(
     private fun observeDevices() {
         viewModelScope.launch {
             bleManager.discoveredDevices.collect { devices ->
-                devices.forEach { device ->
+                // Deduplicate by address (safety net against BLE scanner emitting duplicates)
+                val uniqueDevices = devices.distinctBy { it.address }
+                uniqueDevices.forEach { device ->
                     meshRepository.updateDevice(device)
                     meshRepository.updateChatFromDevice(device)
                 }
-                _uiState.update { it.copy(devices = devices) }
+                _uiState.update { it.copy(devices = uniqueDevices) }
             }
         }
     }
@@ -81,8 +86,6 @@ class MeshViewModel(
     /**
      * Observes received messages from BLE manager.
      */
-    private val processedMessageIds = mutableSetOf<String>()
-
     private fun observeMessages() {
         viewModelScope.launch {
             bleManager.receivedMessages.collect { messages ->
@@ -172,13 +175,30 @@ class MeshViewModel(
         }
     }
     fun getMessagesFlowForChat(chatId: String): StateFlow<List<MeshMessage>> {
-        return meshRepository.getMessagesFlowForChat(chatId, localDeviceAddress)
+        // If chatId looks like a BLE MAC address (not a Mesh ID), try to resolve it to a Mesh ID
+        val resolvedChatId = resolveChatId(chatId)
+        return meshRepository.getMessagesFlowForChat(resolvedChatId, localDeviceAddress)
     }
+
     /**
      * Gets messages for a specific chat.
      */
     fun getMessagesForChat(chatId: String): List<MeshMessage> {
-        return meshRepository.getMessagesForChat(chatId, localDeviceAddress)
+        val resolvedChatId = resolveChatId(chatId)
+        return meshRepository.getMessagesForChat(resolvedChatId, localDeviceAddress)
+    }
+
+    /**
+     * Resolves a chat ID: if it's a BLE MAC address, tries to find the corresponding Mesh ID.
+     * Returns the original chatId if no mapping found.
+     */
+    private fun resolveChatId(chatId: String): String {
+        // Mesh IDs start with "Mesh", BLE MACs contain colons
+        return if (!chatId.startsWith("Mesh") && chatId.contains(":")) {
+            bleManager.getMeshIdByBleAddress(chatId) ?: chatId
+        } else {
+            chatId
+        }
     }
 
     /**

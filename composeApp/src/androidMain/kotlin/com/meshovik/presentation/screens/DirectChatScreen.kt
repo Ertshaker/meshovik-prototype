@@ -15,6 +15,7 @@ import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.presentation.MeshViewModel
 import org.koin.androidx.compose.koinViewModel
+import timber.log.Timber
 
 data class DirectChatScreen(
     private val participantAddress: String,
@@ -36,7 +37,13 @@ data class DirectChatScreen(
         }
 
         val directMessages by messagesFlow.collectAsState()
-
+        LaunchedEffect(directMessages, participantAddress) {
+            Timber.w("CHAT DEBUG: Opened chat with address: $participantAddress")
+            Timber.w("CHAT DEBUG: ${directMessages.size} messages")
+            directMessages.forEach { m ->
+                Timber.w("   -> Sender: ${m.senderId} | Receiver: ${m.receiverId} | Content: ${m.content}")
+            }
+        }
         Scaffold(
             topBar = {
                 TopAppBar(

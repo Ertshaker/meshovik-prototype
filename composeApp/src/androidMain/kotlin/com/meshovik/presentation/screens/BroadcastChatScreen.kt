@@ -64,9 +64,13 @@ object BroadcastChatScreen : Screen {
                             message = message,
                             localDeviceAddress = uiState.localDeviceAddress,
                             onSenderClick = { senderId ->
-                                val device = uiState.devices.find { it.address == senderId }
+                                // senderId is a Mesh ID (e.g. "MeshA1B2C3D4")
+                                // Find device by meshId first, fallback to address
+                                val device = uiState.devices.find { it.meshId == senderId }
+                                    ?: uiState.devices.find { it.address == senderId }
                                 if (device != null) {
-                                    navigator.push(DirectChatScreen(device.address, device.name))
+                                    // Navigate using meshId as chat ID so messages are routed correctly
+                                    navigator.push(DirectChatScreen(device.meshId.ifEmpty { device.address }, device.name))
                                 }
                             }
                         )
