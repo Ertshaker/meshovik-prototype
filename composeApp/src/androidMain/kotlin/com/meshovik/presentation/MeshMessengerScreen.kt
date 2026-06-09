@@ -36,6 +36,7 @@ fun MeshMessengerScreen(
                 is MeshEvent.MessageSent -> { /* Show confirmation */ }
                 is MeshEvent.MessageBroadcast -> { /* Show confirmation */ }
                 is MeshEvent.Error -> { /* Show error */ }
+                else -> {}
             }
         }
     }

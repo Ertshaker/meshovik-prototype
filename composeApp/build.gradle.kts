@@ -73,6 +73,9 @@ kotlin {
             implementation(libs.voyager.navigator)
             implementation(libs.voyager.screen.model)
             implementation(libs.voyager.transitions)
+
+            // Coil — загрузка изображений (URI, file://, content://)
+            implementation(libs.coil.compose)
         }
 
         commonTest.dependencies {

@@ -149,6 +149,27 @@ class MeshRepository {
         updateChatLastMessage(chatId, message.content, message.timestamp)
     }
 
+    /**
+     * Обновляет localUri вложения в сообщении после успешного получения файла.
+     * Ищет сообщение по attachment.id в обоих списках (_messages и _sentMessages).
+     */
+    fun updateAttachmentLocalUri(attachmentId: String, localUri: String) {
+        _messages.update { messages ->
+            messages.map { msg ->
+                if (msg.attachment?.id == attachmentId) {
+                    msg.copy(attachment = msg.attachment.copy(localUri = localUri))
+                } else msg
+            }
+        }
+        _sentMessages.update { messages ->
+            messages.map { msg ->
+                if (msg.attachment?.id == attachmentId) {
+                    msg.copy(attachment = msg.attachment.copy(localUri = localUri))
+                } else msg
+            }
+        }
+    }
+
     fun clear() {
         _devices.value = emptyList()
         _chats.value = emptyList()

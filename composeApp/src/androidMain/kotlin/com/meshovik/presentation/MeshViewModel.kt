@@ -1,24 +1,39 @@
 package com.meshovik.presentation
 
 import android.Manifest
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
 import androidx.annotation.RequiresPermission
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
+import com.meshovik.domain.entity.Attachment
+import com.meshovik.domain.entity.AttachmentType
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
+import com.meshovik.domain.entity.MeshMessageStatus
+import com.meshovik.transfer.FileTransferManager
+import com.meshovik.transfer.FileTransferState
+import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 /**
  * Main ViewModel for the mesh messenger.
- * Coordinates BLE operations and UI state.
+ * Coordinates BLE operations, file transfers, and UI state.
  */
 class MeshViewModel(
     private val bleManager: BleManager,
-    private val meshRepository: MeshRepository
+    private val meshRepository: MeshRepository,
+    private val fileTransferManager: FileTransferManager,
+    private val context: Context
 ) : ViewModel() {
 
     // Local device address for message filtering
@@ -39,6 +54,8 @@ class MeshViewModel(
         observeBleState()
         observeDevices()
         observeMessages()
+        observeFileTransfers()
+        observeIncomingTransfers()
         // Initialize local device address in UI state
         _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
     }
@@ -85,6 +102,7 @@ class MeshViewModel(
 
     /**
      * Observes received messages from BLE manager.
+     * При получении сообщения с вложением — автоматически запускает приём файла.
      */
     private fun observeMessages() {
         viewModelScope.launch {
@@ -94,9 +112,49 @@ class MeshViewModel(
                     if (message.id !in processedMessageIds) {
                         processedMessageIds.add(message.id)
                         meshRepository.addReceivedMessage(message)
+
+                        // Если это сообщение с вложением — уведомляем FileTransferManager
+                        message.attachment?.let { attachment ->
+                            Timber.i("Received attachment metadata via BLE: ${attachment.id} (${attachment.fileName})")
+                            fileTransferManager.notifyIncomingTransfer(attachment)
+                            // Автоматически начинаем приём файла
+                            startReceivingFile(attachment)
+                        }
                     }
                 }
                 _uiState.update { it.copy(receivedMessages = messages) }
+            }
+        }
+    }
+
+    /**
+     * Observes file transfer states.
+     */
+    private fun observeFileTransfers() {
+        viewModelScope.launch {
+            fileTransferManager.transfers.collect { transfers ->
+                _uiState.update { it.copy(fileTransfers = transfers) }
+
+                // Обновляем сообщения с завершёнными передачами
+                transfers.values
+                    .filter { it.status == FileTransferStatus.COMPLETED && !it.isSender }
+                    .forEach { transferState ->
+                        transferState.localUri?.let { uri ->
+                            meshRepository.updateAttachmentLocalUri(transferState.transferId, uri)
+                        }
+                    }
+            }
+        }
+    }
+
+    /**
+     * Observes incoming transfer requests (для показа "Получаем изображение...").
+     */
+    private fun observeIncomingTransfers() {
+        viewModelScope.launch {
+            fileTransferManager.incomingTransferRequests.collect { attachment ->
+                Timber.i("Incoming transfer request: ${attachment.id}")
+                _events.emit(MeshEvent.IncomingFileTransfer(attachment))
             }
         }
     }
@@ -142,7 +200,7 @@ class MeshViewModel(
     }
 
     /**
-     * Sends a message to a specific device.
+     * Sends a text message to a specific device.
      */
     fun sendMessage(targetAddress: String, content: String) {
         if (content.isBlank()) return
@@ -174,6 +232,80 @@ class MeshViewModel(
             _events.emit(MeshEvent.MessageBroadcast(message))
         }
     }
+
+    /**
+     * Отправляет изображение:
+     * 1. Создаёт Attachment с метаданными + thumbnail
+     * 2. Отправляет метаданные по BLE
+     * 3. Запускает передачу файла через Wi-Fi Direct
+     *
+     * @param targetAddress  MeshID или BLE-адрес получателя
+     * @param imageUri       URI выбранного изображения
+     * @param caption        Подпись (опционально)
+     */
+    fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
+        viewModelScope.launch {
+            try {
+                Timber.i("sendImage: target=$targetAddress, uri=$imageUri")
+
+                // Получаем метаданные файла
+                val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
+                val attachmentId = UUID.randomUUID().toString().take(12)
+
+                // Генерируем thumbnail (Base64, ~100x100px)
+                val thumbnailBase64 = generateThumbnail(imageUri)
+
+                // Получаем размеры изображения
+                val (width, height) = getImageDimensions(imageUri)
+
+                val attachment = Attachment(
+                    id = attachmentId,
+                    type = AttachmentType.IMAGE,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    sizeBytes = sizeBytes,
+                    localUri = imageUri.toString(),
+                    thumbnailBase64 = thumbnailBase64,
+                    width = width,
+                    height = height
+                )
+
+                // 1. Отправляем метаданные по BLE
+                val message = bleManager.sendMessageWithAttachment(
+                    targetAddress = targetAddress,
+                    attachment = attachment,
+                    caption = caption
+                )
+                meshRepository.addSentMessage(message)
+
+                _uiState.update { state ->
+                    state.copy(sentMessages = state.sentMessages + message)
+                }
+
+                _events.emit(MeshEvent.MessageSent(message))
+
+                // 2. Запускаем передачу файла через Wi-Fi Direct
+                Timber.i("Starting Wi-Fi Direct file transfer: $attachmentId")
+                fileTransferManager.sendFile(
+                    attachment = attachment,
+                    localUri = imageUri.toString(),
+                    targetMeshId = targetAddress
+                )
+
+            } catch (e: Exception) {
+                Timber.e(e, "sendImage failed")
+                _events.emit(MeshEvent.Error("Не удалось отправить изображение: ${e.message}"))
+            }
+        }
+    }
+
+    /**
+     * Отменить передачу файла.
+     */
+    fun cancelFileTransfer(transferId: String) {
+        fileTransferManager.cancelTransfer(transferId)
+    }
+
     fun getMessagesFlowForChat(chatId: String): StateFlow<List<MeshMessage>> {
         // If chatId looks like a BLE MAC address (not a Mesh ID), try to resolve it to a Mesh ID
         val resolvedChatId = resolveChatId(chatId)
@@ -215,16 +347,111 @@ class MeshViewModel(
             }
         }
     }
+
     /**
      * Gets the local device info.
      */
     fun getLocalDeviceInfo(): Pair<String, String> {
         return bleManager.getLocalAddress() to bleManager.getLocalName()
     }
+
+    // ─── Private helpers ────────────────────────────────────────────────────
+
+    /**
+     * Запускает приём файла по Wi-Fi Direct.
+     */
+    private fun startReceivingFile(attachment: Attachment) {
+        viewModelScope.launch {
+            try {
+                Timber.i("Starting file receive: ${attachment.id}")
+                val localUri = fileTransferManager.receiveFile(
+                    transferId = attachment.id,
+                    attachment = attachment
+                )
+                Timber.i("File received: ${attachment.id} -> $localUri")
+                _events.emit(MeshEvent.FileReceived(attachment, localUri))
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to receive file: ${attachment.id}")
+                _events.emit(MeshEvent.Error("Не удалось получить файл: ${e.message}"))
+            }
+        }
+    }
+
+    /**
+     * Получает метаданные файла по URI.
+     */
+    private fun getFileMetadata(uri: Uri): Triple<String, String, Long> {
+        val contentResolver = context.contentResolver
+        var fileName = "image_${System.currentTimeMillis()}.jpg"
+        var mimeType = "image/jpeg"
+        var sizeBytes = 0L
+
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (cursor.moveToFirst()) {
+                if (nameIndex >= 0) fileName = cursor.getString(nameIndex) ?: fileName
+                if (sizeIndex >= 0) sizeBytes = cursor.getLong(sizeIndex)
+            }
+        }
+
+        contentResolver.getType(uri)?.let { mimeType = it }
+
+        // Если размер не получен через cursor — читаем поток
+        if (sizeBytes == 0L) {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                sizeBytes = stream.available().toLong()
+            }
+        }
+
+        return Triple(fileName, mimeType, sizeBytes)
+    }
+
+    /**
+     * Генерирует thumbnail изображения в Base64 (100x100px, JPEG quality=60).
+     */
+    private fun generateThumbnail(uri: Uri): String? {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val originalBitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream.close()
+
+            val thumbnailSize = 100
+            val thumbnail = Bitmap.createScaledBitmap(originalBitmap, thumbnailSize, thumbnailSize, true)
+            originalBitmap.recycle()
+
+            val outputStream = ByteArrayOutputStream()
+            thumbnail.compress(Bitmap.CompressFormat.JPEG, 60, outputStream)
+            thumbnail.recycle()
+
+            Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to generate thumbnail")
+            null
+        }
+    }
+
+    /**
+     * Получает размеры изображения.
+     */
+    private fun getImageDimensions(uri: Uri): Pair<Int, Int> {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+            Pair(options.outWidth, options.outHeight)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to get image dimensions")
+            Pair(0, 0)
+        }
+    }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun onCleared() {
         super.onCleared()
         bleManager.cleanup()
+        fileTransferManager.cleanup()
     }
 }
 
@@ -239,7 +466,9 @@ data class MeshUiState(
     val isAdvertising: Boolean = false,
     val connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState> = emptyMap(),
     val selectedDevice: MeshDevice? = null,
-    val localDeviceAddress: String = ""
+    val localDeviceAddress: String = "",
+    /** Состояния всех активных/завершённых передач файлов */
+    val fileTransfers: Map<String, FileTransferState> = emptyMap()
 )
 
 /**
@@ -250,4 +479,8 @@ sealed class MeshEvent {
     data class MessageSent(val message: MeshMessage) : MeshEvent()
     data class MessageBroadcast(val message: MeshMessage) : MeshEvent()
     data class Error(val message: String) : MeshEvent()
+    /** Получены метаданные входящего вложения по BLE */
+    data class IncomingFileTransfer(val attachment: Attachment) : MeshEvent()
+    /** Файл успешно получен по Wi-Fi Direct */
+    data class FileReceived(val attachment: Attachment, val localUri: String) : MeshEvent()
 }

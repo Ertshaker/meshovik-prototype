@@ -12,6 +12,7 @@ import com.meshovik.BleGattServer
 import com.meshovik.BleReassembler
 import com.meshovik.BleScanner
 import com.meshovik.core.util.DeviceIdProvider
+import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
@@ -496,6 +497,58 @@ class BleManager(
                 byteArrayOf(ttl.toByte(), hopCount.toByte()) +
                 sizeBytes +
                 payload
+    }
+
+    /**
+     * Отправляет сообщение с вложением:
+     * - По BLE передаются только метаданные (Attachment)
+     * - Сам файл передаётся отдельно через Wi-Fi Direct (FileTransferManager)
+     *
+     * @param targetAddress  MeshID или BLE-адрес получателя
+     * @param attachment     Метаданные вложения
+     * @param caption        Подпись к вложению (опционально)
+     * @return Созданное MeshMessage с вложением
+     */
+    fun sendMessageWithAttachment(
+        targetAddress: String,
+        attachment: Attachment,
+        caption: String = ""
+    ): MeshMessage {
+        val messageId = UUID.randomUUID().toString().take(8)
+        val message = MeshMessage(
+            id = messageId,
+            senderId = localDeviceAddress,
+            receiverId = targetAddress,
+            content = caption,
+            type = MessageType.ATTACHMENT,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            status = MeshMessageStatus.SENT,
+            ttl = 5,
+            hopCount = 0,
+            attachment = attachment
+        )
+
+        // Сохраняем сразу в локальный список
+        _receivedMessages.update { it + message }
+
+        scope.launch {
+            val packetData = createMeshPacket(
+                packetId = messageId,
+                ttl = message.ttl,
+                hopCount = message.hopCount,
+                payload = Json.encodeToString(message).encodeToByteArray()
+            )
+
+            val targetBle = meshIdToBleMap[targetAddress] ?: targetAddress
+            val sent = sendData(targetBle, packetData)
+            if (sent) {
+                Timber.i("✅ Attachment metadata sent via BLE: ${attachment.id} (${attachment.fileName})")
+            } else {
+                Timber.e("❌ Failed to send attachment metadata via BLE: ${attachment.id}")
+            }
+        }
+
+        return message
     }
 
     /**
