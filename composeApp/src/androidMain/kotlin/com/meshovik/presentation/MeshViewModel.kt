@@ -56,6 +56,7 @@ class MeshViewModel(
         observeMessages()
         observeFileTransfers()
         observeIncomingTransfers()
+        observeWifiDirectPeers()
         // Initialize local device address in UI state
         _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
     }
@@ -155,6 +156,21 @@ class MeshViewModel(
             fileTransferManager.incomingTransferRequests.collect { attachment ->
                 Timber.i("Incoming transfer request: ${attachment.id}")
                 _events.emit(MeshEvent.IncomingFileTransfer(attachment))
+            }
+        }
+    }
+
+    /**
+     * Observes Wi-Fi Direct peers for debugging.
+     */
+    private fun observeWifiDirectPeers() {
+        viewModelScope.launch {
+            fileTransferManager.wifiDirectManager.peers.collect { peers ->
+                _uiState.update { it.copy(wifiDirectPeers = peers) }
+                Timber.d("Wi-Fi Direct peers updated: ${peers.size} devices")
+                peers.forEachIndexed { i, d ->
+                    Timber.d("  [$i] name=${d.deviceName} addr=${d.deviceAddress} status=${d.status}")
+                }
             }
         }
     }
@@ -304,6 +320,34 @@ class MeshViewModel(
      */
     fun cancelFileTransfer(transferId: String) {
         fileTransferManager.cancelTransfer(transferId)
+    }
+
+    /**
+     * Повторить отправку файла при ошибке.
+     */
+    fun retryFileTransfer(transferId: String, targetAddress: String) {
+        viewModelScope.launch {
+            try {
+                val transferState = fileTransferManager.getTransferState(transferId)
+                if (transferState?.status == FileTransferStatus.FAILED) {
+                    // Находим сообщение с этим attachmentId
+                    val message = _uiState.value.sentMessages.find { it.attachment?.id == transferId }
+                        ?: _uiState.value.receivedMessages.find { it.attachment?.id == transferId }
+
+                    if (message?.attachment != null) {
+                        Timber.i("Retrying file transfer: $transferId")
+                        fileTransferManager.sendFile(
+                            attachment = message.attachment,
+                            localUri = message.attachment.localUri ?: transferState.localUri ?: "",
+                            targetMeshId = targetAddress
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "retryFileTransfer failed: $transferId")
+                _events.emit(MeshEvent.Error("Повтор отправки не удался: ${e.message}"))
+            }
+        }
     }
 
     fun getMessagesFlowForChat(chatId: String): StateFlow<List<MeshMessage>> {
@@ -468,7 +512,9 @@ data class MeshUiState(
     val selectedDevice: MeshDevice? = null,
     val localDeviceAddress: String = "",
     /** Состояния всех активных/завершённых передач файлов */
-    val fileTransfers: Map<String, FileTransferState> = emptyMap()
+    val fileTransfers: Map<String, FileTransferState> = emptyMap(),
+    /** Список обнаруженных Wi-Fi Direct устройств (для отладки) */
+    val wifiDirectPeers: List<android.net.wifi.p2p.WifiP2pDevice> = emptyList()
 )
 
 /**

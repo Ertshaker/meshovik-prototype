@@ -146,7 +146,9 @@ class BleManager(
             }
         }
     }
-
+    fun getBleAddressByMeshId(meshId: String): String? {
+        return meshIdToBleMap[meshId]
+    }
     /**
      * Starts the mesh service (advertising).
      */

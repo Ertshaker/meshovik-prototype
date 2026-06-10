@@ -58,6 +58,7 @@ object ChatListScreen : Screen {
                 ChatDrawerContent(
                     chats = chatList,
                     isScanning = uiState.isScanning,
+                    wifiDirectPeers = uiState.wifiDirectPeers,
                     onChatClick = { chat ->
                         when (chat.type) {
                             ChatType.BROADCAST -> {

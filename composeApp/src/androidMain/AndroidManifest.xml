@@ -2,30 +2,73 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- BLE Permissions for Android 12+ (API 31+) -->
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="31"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" tools:targetApi="31"/>
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" tools:targetApi="31"/>
+    <!-- ═══════════════════════════════════════════════════════════════════
+         BLE Permissions
+         ═══════════════════════════════════════════════════════════════════ -->
 
-    <!-- BLE Permissions for Android 11 and below (API 30 and below) -->
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <!-- Android 12+ (API 31+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
+        tools:targetApi="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
+        tools:targetApi="31" />
+
+    <!-- Android 11 и ниже (API ≤ 30) -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         Location Permissions
+         Требуется для BLE-сканирования (Android ≤ 12) и Wi-Fi Direct
+         peer discovery (Android ≤ 12). На Android 13+ заменяется
+         NEARBY_WIFI_DEVICES для Wi-Fi Direct.
+         ═══════════════════════════════════════════════════════════════════ -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Wi-Fi Direct (P2P) Permissions -->
+    <!-- ═══════════════════════════════════════════════════════════════════
+         Wi-Fi Direct (P2P) Permissions
+         ═══════════════════════════════════════════════════════════════════ -->
+
+    <!-- Базовые Wi-Fi разрешения — обязательны для Wi-Fi Direct -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Wi-Fi Direct peer discovery requires location on Android < 13 -->
+
+    <!--
+        NEARBY_WIFI_DEVICES (Android 13+, API 33+):
+        Заменяет ACCESS_FINE_LOCATION для Wi-Fi Direct peer discovery.
+        ВАЖНО: НЕ используем neverForLocation здесь, потому что Wi-Fi Direct
+        peer discovery МОЖЕТ использоваться для определения местоположения.
+        Если вы уверены, что не используете его для геолокации — можно добавить
+        android:usesPermissionFlags="neverForLocation", но тогда нужно явно
+        указать это в Privacy Policy.
+    -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="33" />
 
-    <!-- Hardware feature declaration -->
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
-    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <!-- ═══════════════════════════════════════════════════════════════════
+         Media / Storage Permissions
+         ═══════════════════════════════════════════════════════════════════ -->
+    <!-- Android 13+ -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:targetApi="33" />
+    <!-- Android 12 и ниже -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         Hardware Feature Declarations
+         ═══════════════════════════════════════════════════════════════════ -->
+    <uses-feature android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+    <!-- Wi-Fi Direct — не обязателен, чтобы не блокировать установку -->
+    <uses-feature android:name="android.hardware.wifi.direct"
+        android:required="false" />
 
     <application
         android:name="com.meshovik.MeshovikApplication"
@@ -37,10 +80,9 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:exported="true"
-            android:name="com.meshovik.presentation.MainActivity" >
+            android:name="com.meshovik.presentation.MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>

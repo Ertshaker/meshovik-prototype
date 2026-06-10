@@ -53,20 +53,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestBlePermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_ADVERTISE
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.BLUETOOTH,
-                Manifest.permission.BLUETOOTH_ADMIN,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
-        }
+        // Собираем все необходимые разрешения в один запрос.
+        // Разделение на два запроса (launcher + requestPermissions) приводит к тому,
+        // что второй запрос игнорируется системой, если первый ещё не завершён.
+        val permissions = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Android 12+ (API 31+): новые BLE разрешения
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            } else {
+                // Android 11 и ниже
+                add(Manifest.permission.BLUETOOTH)
+                add(Manifest.permission.BLUETOOTH_ADMIN)
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Android 13+ (API 33+): NEARBY_WIFI_DEVICES для Wi-Fi Direct
+                add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+
+            // ACCESS_FINE_LOCATION нужен:
+            // - На Android ≤ 12 для BLE-сканирования И Wi-Fi Direct peer discovery
+            // - На Android 13+ для BLE-сканирования (если BLUETOOTH_SCAN без neverForLocation)
+            // Запрашиваем всегда — лишним не будет
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }.toTypedArray()
+
+        Timber.i("Requesting permissions: ${permissions.toList()}")
         bluetoothPermissionsLauncher.launch(permissions)
     }
 

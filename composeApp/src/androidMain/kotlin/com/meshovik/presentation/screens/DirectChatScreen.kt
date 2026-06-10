@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -58,9 +59,9 @@ data class DirectChatScreen(
 
         val directMessages by messagesFlow.collectAsState()
 
-        // Лаунчер для выбора изображения из галереи
+        // Лаунчер для выбора изображения из галереи (современный API)
         val imagePickerLauncher = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.GetContent()
+            contract = ActivityResultContracts.PickVisualMedia()
         ) { uri: Uri? ->
             uri?.let {
                 Timber.i("Image selected: $it")
@@ -104,6 +105,8 @@ data class DirectChatScreen(
                             message = message,
                             localDeviceAddress = uiState.localDeviceAddress,
                             transferState = transferState,
+                            participantAddress = participantAddress,
+                            viewModel = viewModel,
                             onImageClick = { imageUri ->
                                 navigator.push(
                                     FullScreenImageScreen(
@@ -126,7 +129,7 @@ data class DirectChatScreen(
                 ) {
                     // Кнопка прикрепить изображение
                     IconButton(
-                        onClick = { imagePickerLauncher.launch("image/*") }
+                        onClick = { imagePickerLauncher.launch(PickVisualMediaRequest()) }
                     ) {
                         Text(
                             text = "🖼",
@@ -163,6 +166,8 @@ private fun DirectMessageItem(
     message: MeshMessage,
     localDeviceAddress: String,
     transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
     val isFromMe = message.senderId == localDeviceAddress
@@ -188,6 +193,8 @@ private fun DirectMessageItem(
                         ImageAttachmentContent(
                             attachment = message.attachment,
                             transferState = transferState,
+                            participantAddress = participantAddress,
+                            viewModel = viewModel,
                             onImageClick = onImageClick
                         )
                         // Подпись (если есть)
@@ -232,6 +239,8 @@ private fun DirectMessageItem(
 private fun ImageAttachmentContent(
     attachment: Attachment,
     transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
     val localUri = attachment.localUri
@@ -294,19 +303,39 @@ private fun ImageAttachmentContent(
             }
         }
 
-        // Статус ошибки
+        // Статус ошибки с кнопкой повтора
         if (transferState?.status == FileTransferStatus.FAILED) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.5f)),
+                    .background(Color.Black.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "❌ Ошибка передачи",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "❌ Ошибка передачи",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.retryFileTransfer(
+                                transferId = attachment.id,
+                                targetAddress = participantAddress
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text("Повторить", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
         }
     }
