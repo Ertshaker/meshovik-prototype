@@ -34,7 +34,6 @@ actual class BleScanner(
                     }
                 }
                 scanner.advertisements.collect { adv ->
-                    Timber.d("BLE advertisement: ${adv.name ?: "Unknown"} (${adv.address})")
                     advertisementsFlow.emit(adv)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

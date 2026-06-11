@@ -24,7 +24,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
@@ -66,8 +68,11 @@ class BleManager(
     private val _discoveredDevices = MutableStateFlow<List<MeshDevice>>(emptyList())
     val discoveredDevices: StateFlow<List<MeshDevice>> = _discoveredDevices.asStateFlow()
 
-    private val _receivedMessages = MutableStateFlow<List<MeshMessage>>(emptyList())
-    val receivedMessages: StateFlow<List<MeshMessage>> = _receivedMessages.asStateFlow()
+    private val _receivedMessages = MutableSharedFlow<MeshMessage>(
+        extraBufferCapacity = 32,
+        replay = 0
+    )
+    val receivedMessages: SharedFlow<MeshMessage> = _receivedMessages.asSharedFlow()
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -96,6 +101,7 @@ class BleManager(
     /**
      * Initializes local device info.
      */
+    @SuppressLint("MissingPermission")
     private fun initializeLocalDeviceInfo() {
         localDeviceAddress = deviceIdProvider.getDeviceId()
         localDeviceName = deviceIdProvider.getUserName()
@@ -260,7 +266,8 @@ class BleManager(
             lastSeen = Clock.System.now(),
             isOnline = true,
             hopCount = 0,
-            meshId = discoveredMeshId
+            meshId = discoveredMeshId,
+            wifiDirectAddress = null
         )
     }
 
@@ -365,7 +372,37 @@ class BleManager(
 
     private fun handleReceivedMessage(sourceBleAddress: String, message: MeshMessage) {
         var finalMessage = message
+        if (message.content.contains("WIFI_HANDSHAKE")) {
+            try {
+                val data = Json.decodeFromString<Map<String, String>>(message.content)
+                if (data["type"] == "WIFI_HANDSHAKE") {
+                    val wifiMac = data["wifiDirectAddress"]
+                    val senderMeshId = data["meshId"]
 
+                    if (!wifiMac.isNullOrBlank()) {
+                        // Сохраняем маппинг BLE → WiFi
+                        // (Можно добавить отдельную мапу в BleManager)
+                        Timber.i("✅ Получен Wi-Fi Direct адрес от $sourceBleAddress → $wifiMac")
+
+                        // Обновляем MeshDevice
+                        _discoveredDevices.update { devices ->
+                            devices.map { device ->
+                                if (device.address == sourceBleAddress) {
+                                    device.copy(wifiDirectAddress = wifiMac)
+                                } else device
+                            }
+                        }
+                    }
+                    if (!senderMeshId.isNullOrBlank()) {
+                        bleToMeshIdMap[sourceBleAddress] = senderMeshId
+                        meshIdToBleMap[senderMeshId] = sourceBleAddress
+                    }
+                    return // handshake не сохраняем как обычное сообщение
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to parse WIFI_HANDSHAKE")
+            }
+        }
         // Если senderId выглядит как MeshID — сохраняем маппинг
         if (message.senderId.startsWith("Mesh") || message.senderId.length > 20) {
             bleToMeshIdMap[sourceBleAddress] = message.senderId
@@ -378,8 +415,9 @@ class BleManager(
                 finalMessage = message.copy(senderId = meshId)
             }
         }
-
-        _receivedMessages.update { it + finalMessage }
+        scope.launch {
+            _receivedMessages.emit(finalMessage)
+        }
         Timber.i("✅ Saved message: ${finalMessage.senderId} -> ${finalMessage.receiverId} | ${finalMessage.content}")
     }
 
@@ -400,8 +438,9 @@ class BleManager(
             hopCount = 0
         )
 
-        // Сохраняем сразу
-        _receivedMessages.update { it + message }
+        scope.launch {
+        _receivedMessages.emit(message)
+        }
 
         scope.launch {
             val packetData = createMeshPacket(
@@ -529,9 +568,11 @@ class BleManager(
             hopCount = 0,
             attachment = attachment
         )
-
+        scope.launch {
+            _receivedMessages.emit(message)
+        }
         // Сохраняем сразу в локальный список
-        _receivedMessages.update { it + message }
+
 
         scope.launch {
             val packetData = createMeshPacket(
@@ -594,7 +635,6 @@ class BleManager(
      */
     sealed class ConnectionState {
         data class Connected(val address: String) : ConnectionState()
-        data class Disconnected(val address: String) : ConnectionState()
         data class Connecting(val address: String) : ConnectionState()
     }
 }

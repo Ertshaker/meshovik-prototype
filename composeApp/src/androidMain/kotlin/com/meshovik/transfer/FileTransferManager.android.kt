@@ -26,6 +26,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import androidx.core.net.toUri
 
 // ─── Константы ──────────────────────────────────────────────────────────────
 
@@ -157,9 +158,13 @@ actual class FileTransferManager(private val context: Context) {
 
         try {
             // ── Шаг 1: Убеждаемся, что discovery запущен ──────────────────
-            delay(500)
             ensureP2pEnabled()
-            wifiDirectManager.ensureDiscovering()
+
+            if (wifiDirectManager.discoveryState.value != DiscoveryState.DISCOVERING) {
+                wifiDirectManager.ensureDiscovering()
+            }
+
+            delay(1200)
 
             // ── Шаг 2: Ждём появления нужного peer ────────────────────────
             val targetPeer = waitForPeer(targetMeshId)
@@ -169,6 +174,13 @@ actual class FileTransferManager(private val context: Context) {
                 )
 
             Timber.i("Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
+
+            wifiDirectManager.removeGroup()
+            delay(800)
+
+            wifiDirectManager.stopDiscovery() // важно
+            delay(500)
+
 
             // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
             val groupOwnerAddress = if (wifiDirectManager.isConnected.value) {
@@ -206,7 +218,7 @@ actual class FileTransferManager(private val context: Context) {
                 )
             )
 
-            val uri = Uri.parse(localUri)
+            val uri = localUri.toUri()
             val inputStream = context.contentResolver.openInputStream(uri)
                 ?: throw Exception("Не удалось открыть файл: $localUri")
 
@@ -275,6 +287,17 @@ actual class FileTransferManager(private val context: Context) {
             var clientSocket: Socket? = null
 
             try {
+                Timber.i("receiveFile: создаём P2P группу (становимся Group Owner)")
+                val groupCreated = withTimeoutOrNull(8000) {
+                    wifiDirectManager.createGroupSafely()  // новую функцию
+                }
+
+                if (groupCreated != true) {
+                    throw Exception("Не удалось создать P2P группу")
+                }
+
+                delay(1500) // даём время группе подняться
+
                 val serverSocket = getOrCreateServerSocket()
                 Timber.i("receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")
 
@@ -395,7 +418,6 @@ actual class FileTransferManager(private val context: Context) {
             sharedServerSocket?.runCatching { close() }
             sharedServerSocket = null
         }
-        wifiDirectManager.unregister()
         Timber.i("FileTransferManager cleaned up")
     }
 
@@ -431,24 +453,9 @@ actual class FileTransferManager(private val context: Context) {
         Timber.i("waitForPeer: ищем $deviceAddress (таймаут ${PEER_WAIT_TIMEOUT_MS / 1000}с)")
 
         return withTimeoutOrNull(PEER_WAIT_TIMEOUT_MS) {
-            // Сначала проверяем уже известные peers
-            val existing = wifiDirectManager.peers.value.find {
-                it.deviceAddress.equals(deviceAddress, ignoreCase = true)
-            }
-            if (existing != null) {
-                Timber.d("waitForPeer: peer уже в списке")
-                return@withTimeoutOrNull existing
-            }
-
-            // Ждём обновления списка peers
-            wifiDirectManager.peers.first { peerList ->
-                peerList.any { it.deviceAddress.equals(deviceAddress, ignoreCase = true) }
+            wifiDirectManager.peers.first { list ->
+                list.any { it.deviceAddress.equals(deviceAddress, ignoreCase = true) }
             }.find { it.deviceAddress.equals(deviceAddress, ignoreCase = true) }
-        }.also { result ->
-            if (result == null) {
-                Timber.w("waitForPeer: $deviceAddress не найден за ${PEER_WAIT_TIMEOUT_MS / 1000}с")
-                Timber.w("Известные peers: ${wifiDirectManager.peers.value.map { it.deviceAddress }}")
-            }
         }
     }
 

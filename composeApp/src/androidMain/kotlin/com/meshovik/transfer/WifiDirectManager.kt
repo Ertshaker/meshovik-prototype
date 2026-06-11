@@ -15,6 +15,7 @@ import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.net.wifi.p2p.WifiP2pManager.ActionListener
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -47,6 +49,7 @@ private const val DISCOVERY_BUSY_DELAY_MS = 2_000L
 
 /** Задержка перед повторным вызовом после ERROR (мс) */
 private const val DISCOVERY_ERROR_DELAY_MS = 3_000L
+private const val DISCOVERY_INTERVAL_MS = 35_000L  // ~30-40 сек, как рекомендуют
 
 /**
  * Менеджер Wi-Fi Direct соединений.
@@ -78,7 +81,10 @@ class WifiDirectManager(private val context: Context) {
 
     private val wifiP2pManager: WifiP2pManager =
         context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+    private var periodicDiscoveryJob: Job? = null
 
+    private val _myWifiDirectAddress = MutableStateFlow<String?>(null)
+    val myWifiDirectAddress: StateFlow<String?> = _myWifiDirectAddress.asStateFlow()
     private var channel: WifiP2pManager.Channel =
         wifiP2pManager.initialize(context, context.mainLooper, object : WifiP2pManager.ChannelListener {
             override fun onChannelDisconnected() {
@@ -132,6 +138,10 @@ class WifiDirectManager(private val context: Context) {
 
     // ─── BroadcastReceiver ───────────────────────────────────────────────────
 
+    init {
+        ensureDiscovering()
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
@@ -162,15 +172,11 @@ class WifiDirectManager(private val context: Context) {
 
                 WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
                     val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(
-                            WifiP2pManager.EXTRA_WIFI_P2P_DEVICE,
-                            WifiP2pDevice::class.java
-                        )
+                        intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE, WifiP2pDevice::class.java)
                     } else {
                         @Suppress("DEPRECATION")
                         intent.getParcelableExtra(WifiP2pManager.EXTRA_WIFI_P2P_DEVICE)
                     }
-                    Timber.d("This device changed: name=${device?.deviceName}, addr=${device?.deviceAddress}, status=${device?.status}")
                 }
             }
         }
@@ -191,6 +197,7 @@ class WifiDirectManager(private val context: Context) {
 
         if (networkInfo?.isConnected == true) {
             _isConnected.value = true
+            Timber.i("Wi-Fi Direct connected")
             requestConnectionInfo()
         } else {
             _isConnected.value = false
@@ -210,11 +217,13 @@ class WifiDirectManager(private val context: Context) {
 
     fun register() {
         context.registerReceiver(receiver, intentFilter)
+        startPeriodicDiscovery()
         Timber.i("WifiDirectManager registered")
     }
 
     fun unregister() {
         stopDiscovery()
+        stopPeriodicDiscovery()
         try {
             context.unregisterReceiver(receiver)
         } catch (e: Exception) {
@@ -372,7 +381,22 @@ class WifiDirectManager(private val context: Context) {
         _discoveryState.value = DiscoveryState.FAILED
         emitUserMessage("Не удалось запустить поиск устройств. Проверьте Wi-Fi.")
     }
+    fun startPeriodicDiscovery() {
+        stopPeriodicDiscovery()
+        periodicDiscoveryJob = scope.launch {
+            while (true) {
+                if (_p2pEnabled.value && hasPermissions() && isLocationEnabled()) {
+                    ensureDiscovering()  // или напрямую discoverPeers()
+                    Timber.i("Wi-Fi Direct начал дисковерить")
+                }
+                delay(DISCOVERY_INTERVAL_MS)
+            }
+        }
+    }
 
+    fun stopPeriodicDiscovery() {
+        periodicDiscoveryJob?.cancel()
+    }
     private fun isLocationEnabled(): Boolean {
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
@@ -435,6 +459,7 @@ class WifiDirectManager(private val context: Context) {
      */
     suspend fun connectToPeer(deviceAddress: String): WifiP2pInfo {
         Timber.i("connectToPeer: $deviceAddress")
+        stopDiscovery()
 
         return suspendCancellableCoroutine { cont ->
             val config = WifiP2pConfig().apply {
@@ -498,13 +523,13 @@ class WifiDirectManager(private val context: Context) {
     fun ensureDiscovering() {
         when (_discoveryState.value) {
             DiscoveryState.DISCOVERING -> {
-                Timber.d("ensureDiscovering: discovery уже активен, пропускаем")
+                Timber.d("Wi-Fi Direct ensureDiscovering: discovery уже активен, пропускаем")
             }
             DiscoveryState.STARTING, DiscoveryState.RETRYING -> {
-                Timber.d("ensureDiscovering: discovery запускается, ждём")
+                Timber.d("Wi-Fi Direct ensureDiscovering: discovery запускается, ждём")
             }
             else -> {
-                Timber.i("ensureDiscovering: запускаем discovery")
+                Timber.i("Wi-Fi Direct ensureDiscovering: запускаем discovery")
                 discoverPeers()
             }
         }
@@ -516,9 +541,14 @@ class WifiDirectManager(private val context: Context) {
         wifiP2pManager.requestPeers(channel) { peerList ->
             val devices = peerList.deviceList.toList()
             _peers.value = devices
-            Timber.d("Peers updated: ${devices.size} устройств")
-            devices.forEachIndexed { i, d ->
-                Timber.d("  [$i] name=${d.deviceName} addr=${d.deviceAddress} status=${deviceStatusText(d.status)}")
+
+            Timber.i("requestPeers: найдено ${devices.size} устройств")
+            if (devices.isEmpty()) {
+                Timber.w("PEERS_CHANGED пришёл, но список пустой!")
+            }
+
+            devices.forEach { d ->
+                Timber.i("Peer: ${d.deviceName} | ${d.deviceAddress} | status=${deviceStatusText(d.status)}")
             }
         }
     }
@@ -531,15 +561,79 @@ class WifiDirectManager(private val context: Context) {
                     connectionInfoChannel.send(info)
                 }
                 Timber.i(
-                    "Connection info: isGroupOwner=${info.isGroupOwner}, " +
+                    "Wi-fi Direct Connection info: isGroupOwner=${info.isGroupOwner}, " +
                     "ownerAddress=${info.groupOwnerAddress?.hostAddress}"
                 )
             } else {
-                Timber.w("requestConnectionInfo: info == null")
+                Timber.w("Wi-fi Direct requestConnectionInfo: info == null")
             }
         }
     }
+    suspend fun createGroupSafely(): Boolean {
+        repeat(2) { attempt ->
+            stopDiscovery()
+            removeGroup()
+            delay(800)
 
+            wifiP2pManager.cancelConnect(channel, null)
+            delay(300)
+
+            val success = createGroup()  // твоя текущая
+            if (success) {
+                // Ждём реального поднятия группы
+                val info = withTimeoutOrNull(5000) {
+                    connectionInfoChannel.receive()
+                }
+                if (info?.isGroupOwner == true && info.groupFormed) {
+                    Timber.i("createGroupSafely: группа поднята успешно")
+                    return true
+                }
+            }
+            delay(1000)
+        }
+        return false
+    }
+    @RequiresApi(Build.VERSION_CODES.Q)
+    suspend fun createGroup(): Boolean {
+        return suspendCancellableCoroutine { cont ->
+            val config =
+                WifiP2pConfig.Builder()
+                    // Один из двух вариантов должен сработать:
+                    .setNetworkName("DIRECT-Mesh-${(System.currentTimeMillis() % 9999).toString().padStart(4, '0')}")
+                    .setPassphrase("12345678")
+                    .build()
+
+            wifiP2pManager.createGroup(channel, config, object : ActionListener {
+                override fun onSuccess() {
+                    Timber.i("createGroup: success")
+                    cont.resume(true)
+                }
+                override fun onFailure(reason: Int) {
+                    Timber.e("createGroup failed: ${reasonText(reason)}")
+                    cont.resume(false)
+                }
+            })
+        }
+    }
+
+    suspend fun removeGroup(): Boolean {
+        return suspendCancellableCoroutine { cont ->
+            wifiP2pManager.removeGroup(channel, object : ActionListener {
+                override fun onSuccess() {
+                    Timber.i("removeGroup: success")
+                    _isConnected.value = false
+                    _connectionInfo.value = null
+                    cont.resume(true)
+                }
+                override fun onFailure(reason: Int) {
+                    Timber.w("removeGroup failed: ${reasonText(reason)}")
+                    _isConnected.value = false
+                    _connectionInfo.value = null
+                    cont.resume(true)
+                }
+            })
+        }
+    }
     private fun emitUserMessage(message: String) {
         scope.launch {
             _userMessages.emit(message)

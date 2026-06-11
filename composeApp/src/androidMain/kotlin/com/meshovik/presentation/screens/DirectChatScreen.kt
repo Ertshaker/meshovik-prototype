@@ -265,42 +265,6 @@ private fun ImageAttachmentContent(
                         .clickable { onImageClick(localUri) }
                 )
             }
-
-            // Есть thumbnail в Base64 — показываем его пока идёт передача
-            attachment.thumbnailBase64 != null -> {
-                val bitmap = remember(attachment.thumbnailBase64) {
-                    try {
-                        val bytes = Base64.decode(attachment.thumbnailBase64, Base64.NO_WRAP)
-                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-
-                if (bitmap != null) {
-                    androidx.compose.foundation.Image(
-                        bitmap = bitmap,
-                        contentDescription = attachment.fileName,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    ImagePlaceholder(attachment.fileName)
-                }
-
-                // Overlay с прогрессом
-                if (transferState != null && !transferState.isFinished) {
-                    TransferProgressOverlay(transferState)
-                }
-            }
-
-            // Нет ни файла, ни thumbnail
-            else -> {
-                ImagePlaceholder(attachment.fileName)
-                if (transferState != null && !transferState.isFinished) {
-                    TransferProgressOverlay(transferState)
-                }
-            }
         }
 
         // Статус ошибки с кнопкой повтора

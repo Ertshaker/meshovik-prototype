@@ -19,6 +19,8 @@ import com.meshovik.domain.entity.MeshMessageStatus
 import com.meshovik.transfer.FileTransferManager
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -38,11 +40,11 @@ class MeshViewModel(
 
     // Local device address for message filtering
     private val localDeviceAddress: String = bleManager.getLocalAddress()
-
+    private val bleToP2pMac = mutableMapOf<String, String>()
     // UI State
     private val _uiState = MutableStateFlow(MeshUiState())
     val uiState: StateFlow<MeshUiState> = _uiState.asStateFlow()
-
+    private val processingAttachments = mutableSetOf<String>()
     // Events
     private val _events = MutableSharedFlow<MeshEvent>()
     val events: SharedFlow<MeshEvent> = _events.asSharedFlow()
@@ -57,10 +59,8 @@ class MeshViewModel(
         observeFileTransfers()
         observeIncomingTransfers()
         observeWifiDirectPeers()
-        // Initialize local device address in UI state
         _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
     }
-
     /**
      * Observes BLE manager state changes.
      */
@@ -107,27 +107,67 @@ class MeshViewModel(
      */
     private fun observeMessages() {
         viewModelScope.launch {
-            bleManager.receivedMessages.collect { messages ->
-                // Добавляем только те, которых ещё нет
-                messages.forEach { message ->
-                    if (message.id !in processedMessageIds) {
-                        processedMessageIds.add(message.id)
-                        meshRepository.addReceivedMessage(message)
+            bleManager.receivedMessages.collect { message ->   // ← теперь одиночное сообщение!
+                if (message.id in processedMessageIds) {
+                    Timber.d("Already processed: ${message.id}")
+                    return@collect
+                }
 
-                        // Если это сообщение с вложением — уведомляем FileTransferManager
-                        message.attachment?.let { attachment ->
-                            Timber.i("Received attachment metadata via BLE: ${attachment.id} (${attachment.fileName})")
-                            fileTransferManager.notifyIncomingTransfer(attachment)
-                            // Автоматически начинаем приём файла
-                            startReceivingFile(attachment)
+                processedMessageIds.add(message.id)
+
+                val isOwnMessage = message.senderId == localDeviceAddress
+
+                if (isOwnMessage) {
+                    meshRepository.addSentMessage(message)
+                    _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
+                    Timber.d("Own message echo: ${message.id}")
+                } else {
+                    meshRepository.addReceivedMessage(message)
+
+                    message.attachment?.let { attachment ->
+                        if (attachment.id in processingAttachments) {
+                            Timber.w("Duplicate attachment skipped: ${attachment.id}")
+                            return@let
+                        }
+
+                        processingAttachments.add(attachment.id)
+
+                        fileTransferManager.notifyIncomingTransfer(attachment)
+
+                        launch {
+                            try {
+                                delay(1500) // можно уменьшить до 800-1000 после тестов
+                                startReceivingFile(attachment)
+                            } finally {
+                                processingAttachments.remove(attachment.id)
+                            }
                         }
                     }
+
+                    _uiState.update { it.copy(receivedMessages = it.receivedMessages + message) }
                 }
-                _uiState.update { it.copy(receivedMessages = messages) }
             }
         }
     }
 
+    private fun launchReceiveWithProtection(attachment: Attachment) {
+        // Защита от нескольких параллельных запусков для одного attachment
+        viewModelScope.launch {
+            try {
+                // Увеличиваем задержку или делаем её конфигурируемой
+                delay(1500)
+
+                // Дополнительная проверка перед запуском
+                if (attachment.id in processingAttachments) {
+                    startReceivingFile(attachment)
+                } else {
+                    Timber.d("Attachment already processed, skipping startReceivingFile")
+                }
+            } finally {
+                processingAttachments.remove(attachment.id)
+            }
+        }
+    }
     /**
      * Observes file transfer states.
      */
@@ -167,9 +207,16 @@ class MeshViewModel(
         viewModelScope.launch {
             fileTransferManager.wifiDirectManager.peers.collect { peers ->
                 _uiState.update { it.copy(wifiDirectPeers = peers) }
-                Timber.d("Wi-Fi Direct peers updated: ${peers.size} devices")
-                peers.forEachIndexed { i, d ->
-                    Timber.d("  [$i] name=${d.deviceName} addr=${d.deviceAddress} status=${d.status}")
+
+                // Пытаемся сопоставить с известными BLE устройствами
+                peers.forEach { p2pDevice ->
+                    Timber.d("Wi-Fi Direct peer name=${p2pDevice.deviceName} addr=${p2pDevice.deviceAddress} status=${p2pDevice.status}")
+                    val bleDevice = bleManager.discoveredDevices.value[0]
+
+                    if (bleDevice != null) {
+                        bleToP2pMac[bleDevice.address] = p2pDevice.deviceAddress
+                        Timber.i("Wi-Fi Direct Mapped BLE ${bleDevice.address} → P2P ${p2pDevice.deviceAddress}")
+                    }
                 }
             }
         }
@@ -262,14 +309,14 @@ class MeshViewModel(
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
         viewModelScope.launch {
             try {
-                Timber.i("sendImage: target=$targetAddress, uri=$imageUri")
+                val targetP2pMac = bleToP2pMac[targetAddress]
+                    ?: targetAddress  // fallback
+
+                Timber.i("Wi-Fi: sendImage: target=$targetP2pMac, uri=$imageUri")
 
                 // Получаем метаданные файла
                 val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
                 val attachmentId = UUID.randomUUID().toString().take(12)
-
-                // Генерируем thumbnail (Base64, ~100x100px)
-                val thumbnailBase64 = generateThumbnail(imageUri)
 
                 // Получаем размеры изображения
                 val (width, height) = getImageDimensions(imageUri)
@@ -281,7 +328,6 @@ class MeshViewModel(
                     mimeType = mimeType,
                     sizeBytes = sizeBytes,
                     localUri = imageUri.toString(),
-                    thumbnailBase64 = thumbnailBase64,
                     width = width,
                     height = height
                 )
@@ -300,12 +346,13 @@ class MeshViewModel(
 
                 _events.emit(MeshEvent.MessageSent(message))
 
+                delay(2000)
                 // 2. Запускаем передачу файла через Wi-Fi Direct
                 Timber.i("Starting Wi-Fi Direct file transfer: $attachmentId")
                 fileTransferManager.sendFile(
                     attachment = attachment,
                     localUri = imageUri.toString(),
-                    targetMeshId = targetAddress
+                    targetMeshId = targetP2pMac
                 )
 
             } catch (e: Exception) {
@@ -315,9 +362,6 @@ class MeshViewModel(
         }
     }
 
-    /**
-     * Отменить передачу файла.
-     */
     fun cancelFileTransfer(transferId: String) {
         fileTransferManager.cancelTransfer(transferId)
     }
@@ -351,7 +395,6 @@ class MeshViewModel(
     }
 
     fun getMessagesFlowForChat(chatId: String): StateFlow<List<MeshMessage>> {
-        // If chatId looks like a BLE MAC address (not a Mesh ID), try to resolve it to a Mesh ID
         val resolvedChatId = resolveChatId(chatId)
         return meshRepository.getMessagesFlowForChat(resolvedChatId, localDeviceAddress)
     }
@@ -407,6 +450,12 @@ class MeshViewModel(
     private fun startReceivingFile(attachment: Attachment) {
         viewModelScope.launch {
             try {
+                val current = fileTransferManager.getTransferState(attachment.id)
+                if (current?.status == FileTransferStatus.TRANSFERRING ||
+                    current?.status == FileTransferStatus.COMPLETED) {
+                    Timber.i("Wi-Fi Direct File already in progress/completed, skipping")
+                }
+
                 Timber.i("Starting file receive: ${attachment.id}")
                 val localUri = fileTransferManager.receiveFile(
                     transferId = attachment.id,
@@ -495,7 +544,6 @@ class MeshViewModel(
     override fun onCleared() {
         super.onCleared()
         bleManager.cleanup()
-        fileTransferManager.cleanup()
     }
 }
 
