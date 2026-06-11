@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import cafe.adriel.voyager.navigator.Navigator
 import com.meshovik.presentation.screens.ChatListScreen
+import org.koin.androidx.compose.KoinAndroidContext
 import org.koin.androidx.compose.koinViewModel
 import timber.log.Timber
 
@@ -48,7 +49,9 @@ class MainActivity : ComponentActivity() {
         checkBluetoothEnabled()
 
         setContent {
-            MeshMessengerApp()
+            KoinAndroidContext {        // ← добавь эту обёртку
+                MeshMessengerApp()
+            }
         }
     }
 

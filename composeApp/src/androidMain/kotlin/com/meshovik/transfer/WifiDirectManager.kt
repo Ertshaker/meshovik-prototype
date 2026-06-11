@@ -354,7 +354,6 @@ class WifiDirectManager(private val context: Context) {
                     delay(DISCOVERY_BUSY_DELAY_MS)
                     // При BUSY — сначала останавливаем, потом пробуем снова
                     stopPeerDiscoverySync()
-                    delay(500)
                 }
 
                 DiscoveryResult.P2P_UNSUPPORTED -> {
@@ -366,7 +365,6 @@ class WifiDirectManager(private val context: Context) {
 
                 DiscoveryResult.ERROR -> {
                     stopPeerDiscoverySync()
-                    delay(1000)
                     val delayMs = DISCOVERY_RETRY_BASE_DELAY_MS * (1L shl (attempt - 1).coerceAtMost(4))
                     Timber.w("discoverPeers: ERROR (попытка $attempt) — ждём ${delayMs}мс перед повтором")
                     _discoveryState.value = DiscoveryState.RETRYING
@@ -573,10 +571,8 @@ class WifiDirectManager(private val context: Context) {
         repeat(2) { attempt ->
             stopDiscovery()
             removeGroup()
-            delay(800)
 
             wifiP2pManager.cancelConnect(channel, null)
-            delay(300)
 
             val success = createGroup()  // твоя текущая
             if (success) {
@@ -589,7 +585,6 @@ class WifiDirectManager(private val context: Context) {
                     return true
                 }
             }
-            delay(1000)
         }
         return false
     }

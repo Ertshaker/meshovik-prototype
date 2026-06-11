@@ -14,6 +14,7 @@ import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.getKoin
 
 /**
  * Main mesh messenger screen.
@@ -22,7 +23,7 @@ import org.koin.androidx.compose.koinViewModel
 @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
 @Composable
 fun MeshMessengerScreen(
-    viewModel: MeshViewModel = koinViewModel()
+    viewModel: MeshViewModel = getKoin().get()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var messageText by remember { mutableStateOf("") }

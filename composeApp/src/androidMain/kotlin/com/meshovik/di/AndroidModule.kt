@@ -13,14 +13,16 @@ import org.koin.dsl.module
  */
 val androidModule = module {
     // Stable device identifier (SharedPreferences-backed, survives app restarts)
-    single { DeviceIdProvider(androidContext()) }
+    single { DeviceIdProvider(get()) }
 
     // BLE Manager
-    single { BleManager(androidContext()) }
+    single { BleManager(get()) }
 
     // File Transfer Manager (Wi-Fi Direct)
-    single { FileTransferManager(androidContext()) }
+    single { FileTransferManager(get()) }
 
     // ViewModel
-    viewModel { MeshViewModel(get(), get(), get(), androidContext()) }
+    single(createdAtStart = true)
+    { MeshViewModel(get(), get(), get(), androidContext()) }
 }
+

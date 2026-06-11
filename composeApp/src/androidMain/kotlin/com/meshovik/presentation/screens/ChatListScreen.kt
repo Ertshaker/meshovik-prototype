@@ -21,6 +21,7 @@ import com.meshovik.presentation.components.ChatDrawerContent
 import com.meshovik.presentation.components.ScanningButton
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.getKoin
 
 object ChatListScreen : Screen {
 
@@ -30,7 +31,7 @@ object ChatListScreen : Screen {
     @Composable
     @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun Content() {
-        val viewModel: MeshViewModel = koinViewModel()
+        val viewModel: MeshViewModel = getKoin().get()
         val navigator = LocalNavigator.currentOrThrow
         val uiState by viewModel.uiState.collectAsState()
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)

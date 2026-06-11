@@ -31,7 +31,7 @@ class MeshovikApplication : Application() {
             androidContext(this@MeshovikApplication)
             modules(
                 commonModule,
-                androidModule
+                androidModule,
             )
         }
 

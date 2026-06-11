@@ -36,6 +36,7 @@ import com.meshovik.presentation.MeshViewModel
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.getKoin
 import timber.log.Timber
 
 data class DirectChatScreen(
@@ -48,7 +49,7 @@ data class DirectChatScreen(
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
-        val viewModel: MeshViewModel = koinViewModel()
+        val viewModel: MeshViewModel = getKoin().get()
         val navigator = LocalNavigator.currentOrThrow
         val uiState by viewModel.uiState.collectAsState()
         var messageText by remember { mutableStateOf("") }

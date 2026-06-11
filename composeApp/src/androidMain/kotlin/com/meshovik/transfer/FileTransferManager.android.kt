@@ -164,8 +164,6 @@ actual class FileTransferManager(private val context: Context) {
                 wifiDirectManager.ensureDiscovering()
             }
 
-            delay(1200)
-
             // ── Шаг 2: Ждём появления нужного peer ────────────────────────
             val targetPeer = waitForPeer(targetMeshId)
                 ?: throw Exception(
@@ -176,11 +174,8 @@ actual class FileTransferManager(private val context: Context) {
             Timber.i("Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
 
             wifiDirectManager.removeGroup()
-            delay(800)
 
             wifiDirectManager.stopDiscovery() // важно
-            delay(500)
-
 
             // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
             val groupOwnerAddress = if (wifiDirectManager.isConnected.value) {
@@ -296,7 +291,7 @@ actual class FileTransferManager(private val context: Context) {
                     throw Exception("Не удалось создать P2P группу")
                 }
 
-                delay(1500) // даём время группе подняться
+                Thread.sleep(1500) // даём время группе подняться
 
                 val serverSocket = getOrCreateServerSocket()
                 Timber.i("receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")
