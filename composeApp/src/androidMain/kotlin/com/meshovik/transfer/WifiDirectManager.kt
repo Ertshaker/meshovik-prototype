@@ -457,8 +457,6 @@ class WifiDirectManager(private val context: Context) {
      */
     suspend fun connectToPeer(deviceAddress: String): WifiP2pInfo {
         Timber.i("connectToPeer: $deviceAddress")
-        stopDiscovery()
-
         return suspendCancellableCoroutine { cont ->
             val config = WifiP2pConfig().apply {
                 this.deviceAddress = deviceAddress
@@ -569,9 +567,6 @@ class WifiDirectManager(private val context: Context) {
     }
     suspend fun createGroupSafely(): Boolean {
         repeat(2) { attempt ->
-            stopDiscovery()
-            removeGroup()
-
             wifiP2pManager.cancelConnect(channel, null)
 
             val success = createGroup()  // твоя текущая
@@ -594,8 +589,8 @@ class WifiDirectManager(private val context: Context) {
             val config =
                 WifiP2pConfig.Builder()
                     // Один из двух вариантов должен сработать:
-                    .setNetworkName("DIRECT-Mesh-${(System.currentTimeMillis() % 9999).toString().padStart(4, '0')}")
-                    .setPassphrase("12345678")
+                    .setNetworkName("DIRECT-Mesh-1488")
+                    .setPassphrase("skibididopdop")
                     .build()
 
             wifiP2pManager.createGroup(channel, config, object : ActionListener {

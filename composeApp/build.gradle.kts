@@ -43,7 +43,7 @@ kotlin {
             implementation(libs.koin.compose.viewmodel)
             // Kable BLE
             implementation(libs.kable.core)
-
+            implementation("cafe.adriel.voyager:voyager-koin:2.2.21-1.10.3")
             // Kotlinx Serialization
             implementation(libs.kotlinx.serialization.json)
 
@@ -71,6 +71,7 @@ kotlin {
 
             // Voyager Navigation
             implementation(libs.voyager.navigator)
+            implementation("cafe.adriel.voyager:voyager-koin:2.2.21-1.10.3")
             implementation(libs.voyager.screen.model)
             implementation(libs.voyager.transitions)
 

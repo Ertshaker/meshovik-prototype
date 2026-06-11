@@ -112,6 +112,7 @@ actual class FileTransferManager(private val context: Context) {
     fun notifyIncomingTransfer(attachment: Attachment) {
         scope.launch {
             _incomingTransferRequests.emit(attachment)
+            Thread.sleep(2000)
             updateTransfer(
                 FileTransferState(
                     transferId = attachment.id,
@@ -172,10 +173,6 @@ actual class FileTransferManager(private val context: Context) {
                 )
 
             Timber.i("Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
-
-            wifiDirectManager.removeGroup()
-
-            wifiDirectManager.stopDiscovery() // важно
 
             // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
             val groupOwnerAddress = if (wifiDirectManager.isConnected.value) {
@@ -283,15 +280,6 @@ actual class FileTransferManager(private val context: Context) {
 
             try {
                 Timber.i("receiveFile: создаём P2P группу (становимся Group Owner)")
-                val groupCreated = withTimeoutOrNull(8000) {
-                    wifiDirectManager.createGroupSafely()  // новую функцию
-                }
-
-                if (groupCreated != true) {
-                    throw Exception("Не удалось создать P2P группу")
-                }
-
-                Thread.sleep(1500) // даём время группе подняться
 
                 val serverSocket = getOrCreateServerSocket()
                 Timber.i("receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")

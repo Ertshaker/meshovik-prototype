@@ -22,6 +22,7 @@ kotlinx-datetime = "0.6.2"
 timber = "5.0.1"
 voyager = "1.0.0"
 coil = "3.2.0"
+voyagerKoin = "2.2.21-1.10.3"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -52,6 +53,7 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+voyager-koin = { module = "cafe.adriel.voyager:voyager-koin", version.ref = "voyagerKoin" }
 voyager-navigator = { module = "cafe.adriel.voyager:voyager-navigator", version.ref = "voyager" }
 voyager-screen-model = { module = "cafe.adriel.voyager:voyager-screenmodel", version.ref = "voyager" }
 voyager-transitions = { module = "cafe.adriel.voyager:voyager-transitions", version.ref = "voyager" }

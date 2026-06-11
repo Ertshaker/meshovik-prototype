@@ -8,7 +8,8 @@ import android.net.Uri
 import android.util.Base64
 import androidx.annotation.RequiresPermission
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import cafe.adriel.voyager.core.model.ScreenModel
+import cafe.adriel.voyager.core.model.screenModelScope
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
 import com.meshovik.domain.entity.Attachment
@@ -21,6 +22,7 @@ import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -37,7 +39,9 @@ class MeshViewModel(
     private val meshRepository: MeshRepository,
     private val fileTransferManager: FileTransferManager,
     applicationContext: Context
-) : ViewModel() {
+) : ScreenModel {
+    private val scope = screenModelScope
+
     private val context = applicationContext.applicationContext
     // Local device address for message filtering
     private val localDeviceAddress: String = bleManager.getLocalAddress()
@@ -53,18 +57,8 @@ class MeshViewModel(
     // Deduplicate received messages (must be declared BEFORE init)
     private val processedMessageIds = mutableSetOf<String>()
 
-    companion object {
-        private var INSTANCE: MeshViewModel? = null
-    }
-
     init {
         Timber.e("=== MeshViewModel CREATED === instance=${System.identityHashCode(this)} | thread=${Thread.currentThread().name}")
-        if (INSTANCE == null) {
-            INSTANCE = this
-            Timber.e("=== MeshViewModel SINGLETON CREATED === instance=${System.identityHashCode(this)}")
-        } else {
-            Timber.w("=== Duplicate MeshViewModel detected! Using existing one ===")
-        }
         if (!observersLaunched) {
             observersLaunched = true
 
@@ -86,22 +80,22 @@ class MeshViewModel(
      * Observes BLE manager state changes.
      */
     private fun observeBleState() {
-       viewModelScope.launch {
-           Timber.i(">>> LAUNCH observeBleState isScanning | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+       scope.launch {
+           Timber.i(">>> LAUNCH observeBleState isScanning | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
            bleManager.isScanning.collect { isScanning ->
                 _uiState.update { it.copy(isScanning = isScanning) }
             }
         }
 
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeBleState isAdvertising | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeBleState isAdvertising | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             bleManager.isAdvertising.collect { isAdvertising ->
                 _uiState.update { it.copy(isAdvertising = isAdvertising) }
             }
         }
 
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeBleState connectionStates | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeBleState connectionStates | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             bleManager.connectionStates.collect { states ->
                 _uiState.update { it.copy(connectionStates = states) }
             }
@@ -112,8 +106,8 @@ class MeshViewModel(
      * Observes discovered devices from BLE manager and syncs to repository.
      */
     private fun observeDevices() {
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeDevices | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeDevices | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             bleManager.discoveredDevices.collect { devices ->
                 // Deduplicate by address (safety net against BLE scanner emitting duplicates)
                 val uniqueDevices = devices.distinctBy { it.address }
@@ -131,8 +125,8 @@ class MeshViewModel(
      * При получении сообщения с вложением — автоматически запускает приём файла.
      */
     private fun observeMessages() {
-         viewModelScope.launch {
-             Timber.i(">>> LAUNCH observeMessages | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+             Timber.i(">>> LAUNCH observeMessages | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
              bleManager.receivedMessages.collect { message ->   // ← теперь одиночное сообщение!
                 if (message.id in processedMessageIds) {
                     Timber.d("Already processed: ${message.id}")
@@ -177,7 +171,7 @@ class MeshViewModel(
 
     private fun launchReceiveWithProtection(attachment: Attachment) {
         // Защита от нескольких параллельных запусков для одного attachment
-        viewModelScope.launch {
+        scope.launch {
             try {
                 // Дополнительная проверка перед запуском
                 if (attachment.id in processingAttachments) {
@@ -194,8 +188,8 @@ class MeshViewModel(
      * Observes file transfer states.
      */
     private fun observeFileTransfers() {
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeFileTransfers | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeFileTransfers | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             fileTransferManager.transfers.collect { transfers ->
                 _uiState.update { it.copy(fileTransfers = transfers) }
 
@@ -215,8 +209,8 @@ class MeshViewModel(
      * Observes incoming transfer requests (для показа "Получаем изображение...").
      */
     private fun observeIncomingTransfers() {
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeIncomingTransfers | thread=${Thread.currentThread().name} | active jobs=   $${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeIncomingTransfers | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             fileTransferManager.incomingTransferRequests.collect { attachment ->
                 Timber.i("Incoming transfer request: ${attachment.id}")
                 _events.emit(MeshEvent.IncomingFileTransfer(attachment))
@@ -228,8 +222,8 @@ class MeshViewModel(
      * Observes Wi-Fi Direct peers for debugging.
      */
     private fun observeWifiDirectPeers() {
-        viewModelScope.launch {
-            Timber.i(">>> LAUNCH observeWifiDirectPeers | thread=${Thread.currentThread().name} | active jobs=${viewModelScope.coroutineContext[Job]?.children?.count()}")
+        scope.launch {
+            Timber.i(">>> LAUNCH observeWifiDirectPeers | thread=${Thread.currentThread().name} | active jobs=${scope.coroutineContext[Job]?.children?.count()}")
             fileTransferManager.wifiDirectManager.peers.collect { peers ->
                 _uiState.update { it.copy(wifiDirectPeers = peers) }
 
@@ -252,7 +246,7 @@ class MeshViewModel(
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     fun startMeshService() {
-        viewModelScope.launch {
+        scope.launch {
             bleManager.startMeshService().collect { success ->
                 if (success) {
                     Timber.i("Mesh service started successfully")
@@ -299,7 +293,7 @@ class MeshViewModel(
             state.copy(sentMessages = state.sentMessages + message)
         }
 
-        viewModelScope.launch {
+        scope.launch {
             _events.emit(MeshEvent.MessageSent(message))
         }
     }
@@ -316,7 +310,7 @@ class MeshViewModel(
             state.copy(sentMessages = state.sentMessages + message)
         }
 
-        viewModelScope.launch {
+        scope.launch {
             _events.emit(MeshEvent.MessageBroadcast(message))
         }
     }
@@ -332,7 +326,7 @@ class MeshViewModel(
      * @param caption        Подпись (опционально)
      */
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val targetP2pMac = bleToP2pMac[targetAddress]
                     ?: targetAddress  // fallback
@@ -394,7 +388,7 @@ class MeshViewModel(
      * Повторить отправку файла при ошибке.
      */
     fun retryFileTransfer(transferId: String, targetAddress: String) {
-        viewModelScope.launch {
+        scope.launch {
             try {
                 val transferState = fileTransferManager.getTransferState(transferId)
                 if (transferState?.status == FileTransferStatus.FAILED) {
@@ -448,7 +442,7 @@ class MeshViewModel(
      * Подключается к выбранному устройству
      */
     fun connectToDevice(device: MeshDevice) {
-        viewModelScope.launch {
+        scope.launch {
             val bleDevice = bleManager.connectToDevice(device.address)
 
             if (bleDevice != null) {
@@ -472,8 +466,9 @@ class MeshViewModel(
      * Запускает приём файла по Wi-Fi Direct.
      */
     private fun startReceivingFile(attachment: Attachment) {
-        viewModelScope.launch {
+        scope.launch {
             try {
+                fileTransferManager.wifiDirectManager.createGroup()
                 val current = fileTransferManager.getTransferState(attachment.id)
                 if (current?.status == FileTransferStatus.TRANSFERRING ||
                     current?.status == FileTransferStatus.COMPLETED) {
@@ -562,12 +557,6 @@ class MeshViewModel(
             Timber.w(e, "Failed to get image dimensions")
             Pair(0, 0)
         }
-    }
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
-    override fun onCleared() {
-        Timber.e("=== MeshViewModel CLEARED === instance=${System.identityHashCode(this)}")
-        super.onCleared()
     }
 }
 
