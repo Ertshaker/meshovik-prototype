@@ -146,7 +146,7 @@ actual class FileTransferManager(private val context: Context) {
         targetMeshId: String
     ): String {
         val transferId = attachment.id
-        Timber.i("sendFile → transferId=$transferId | file=${attachment.fileName} | target=$targetMeshId")
+        Timber.i("Wi-Fi Direct sendFile → transferId=$transferId | file=${attachment.fileName} | target=$targetMeshId")
 
         updateTransfer(
             FileTransferState(
@@ -168,19 +168,19 @@ actual class FileTransferManager(private val context: Context) {
             // ── Шаг 2: Ждём появления нужного peer ────────────────────────
             val targetPeer = waitForPeer(targetMeshId)
                 ?: throw Exception(
-                    "Устройство $targetMeshId не найдено за ${PEER_WAIT_TIMEOUT_MS / 1000}с. " +
-                    "Убедитесь, что оба устройства находятся рядом и Wi-Fi включён."
+                    "Wi-Fi Direct Устройство $targetMeshId не найдено за ${PEER_WAIT_TIMEOUT_MS / 1000}с. " +
+                    "Wi-Fi Direct Убедитесь, что оба устройства находятся рядом и Wi-Fi включён."
                 )
 
-            Timber.i("Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
+            Timber.i("Wi-Fi Direct Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
 
             // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
             val groupOwnerAddress = if (wifiDirectManager.isConnected.value) {
-                Timber.i("Уже подключены, используем существующее соединение")
+                Timber.i("Wi-Fi Direct Уже подключены, используем существующее соединение")
                 wifiDirectManager.connectionInfo.value?.groupOwnerAddress?.hostAddress
-                    ?: throw Exception("Подключены, но GroupOwner IP недоступен")
+                    ?: throw Exception("Wi-Fi Direct Подключены, но GroupOwner IP недоступен")
             } else {
-                Timber.i("Подключаемся к ${targetPeer.deviceAddress}...")
+                Timber.i("Wi-Fi Direct Подключаемся к ${targetPeer.deviceAddress}...")
                 updateTransfer(
                     FileTransferState(
                         transferId = transferId,
@@ -192,13 +192,13 @@ actual class FileTransferManager(private val context: Context) {
 
                 val connectionInfo = withTimeoutOrNull(CONNECTION_TIMEOUT_MS) {
                     wifiDirectManager.connectToPeer(targetPeer.deviceAddress)
-                } ?: throw Exception("Таймаут подключения к ${targetPeer.deviceAddress} (${CONNECTION_TIMEOUT_MS / 1000}с)")
+                } ?: throw Exception("Wi-Fi Direct Таймаут подключения к ${targetPeer.deviceAddress} (${CONNECTION_TIMEOUT_MS / 1000}с)")
 
                 connectionInfo.groupOwnerAddress?.hostAddress
-                    ?: throw Exception("GroupOwner IP недоступен после подключения")
+                    ?: throw Exception("Wi-Fi Direct GroupOwner IP недоступен после подключения")
             }
 
-            Timber.i("GroupOwner IP: $groupOwnerAddress")
+            Timber.i("Wi-Fi Direct GroupOwner IP: $groupOwnerAddress")
 
             // ── Шаг 4: Передаём файл ──────────────────────────────────────
             updateTransfer(
@@ -212,7 +212,7 @@ actual class FileTransferManager(private val context: Context) {
 
             val uri = localUri.toUri()
             val inputStream = context.contentResolver.openInputStream(uri)
-                ?: throw Exception("Не удалось открыть файл: $localUri")
+                ?: throw Exception("Wi-Fi Direct Не удалось открыть файл: $localUri")
 
             sendFileOverSocket(
                 transferId = transferId,
@@ -234,11 +234,11 @@ actual class FileTransferManager(private val context: Context) {
                 )
             )
 
-            Timber.i("sendFile: файл успешно отправлен: $transferId")
+            Timber.i("Wi-Fi Direct sendFile: файл успешно отправлен: $transferId")
             return transferId
 
         } catch (e: Exception) {
-            Timber.e(e, "sendFile failed: $transferId")
+            Timber.e(e, "Wi-Fi Direct sendFile failed: $transferId")
             updateTransfer(
                 FileTransferState(
                     transferId = transferId,
@@ -265,7 +265,7 @@ actual class FileTransferManager(private val context: Context) {
         attachment: Attachment
     ): String {
         Timber.i("receiveFile started: $transferId")
-
+        wifiDirectManager.ensureDiscovering()
         updateTransfer(
             FileTransferState(
                 transferId = transferId,
@@ -279,13 +279,13 @@ actual class FileTransferManager(private val context: Context) {
             var clientSocket: Socket? = null
 
             try {
-                Timber.i("receiveFile: создаём P2P группу (становимся Group Owner)")
+                Timber.i("Wi-Fi Direct receiveFile: создаём P2P группу (становимся Group Owner)")
 
                 val serverSocket = getOrCreateServerSocket()
-                Timber.i("receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")
+                Timber.i("Wi-Fi Direct receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")
 
                 clientSocket = serverSocket.accept()
-                Timber.i("receiveFile: клиент подключился: ${clientSocket.inetAddress?.hostAddress}")
+                Timber.i("Wi-Fi Direct receiveFile: клиент подключился: ${clientSocket.inetAddress?.hostAddress}")
 
                 val outputFile = createOutputFile(attachment)
                 val outputStream = FileOutputStream(outputFile)
@@ -305,14 +305,14 @@ actual class FileTransferManager(private val context: Context) {
                     )
                 )
 
-                Timber.i("receiveFile: файл получен: $transferId → $localUri")
+                Timber.i("Wi-Fi Direct receiveFile: файл получен: $transferId → $localUri")
                 localUri
 
             } catch (e: Exception) {
-                Timber.e(e, "receiveFile failed: $transferId")
+                Timber.e(e, "Wi-Fi Direct receiveFile failed: $transferId")
                 // Если сокет сломан — сбрасываем его, чтобы следующий вызов пересоздал
                 if (e is java.net.SocketException || e is java.io.IOException) {
-                    Timber.w("receiveFile: сбрасываем sharedServerSocket из-за ошибки сокета")
+                    Timber.w("Wi-Fi Direct receiveFile: сбрасываем sharedServerSocket из-за ошибки сокета")
                     synchronized(serverSocketLock) {
                         sharedServerSocket?.runCatching { close() }
                         sharedServerSocket = null
@@ -341,11 +341,11 @@ actual class FileTransferManager(private val context: Context) {
         synchronized(serverSocketLock) {
             val existing = sharedServerSocket
             if (existing != null && !existing.isClosed) {
-                Timber.d("getOrCreateServerSocket: переиспользуем существующий сокет на порту $FILE_TRANSFER_PORT")
+                Timber.d("Wi-Fi Direct getOrCreateServerSocket: переиспользуем существующий сокет на порту $FILE_TRANSFER_PORT")
                 return existing
             }
 
-            Timber.i("getOrCreateServerSocket: создаём новый ServerSocket на порту $FILE_TRANSFER_PORT")
+            Timber.i("Wi-Fi Direct getOrCreateServerSocket: создаём новый ServerSocket на порту $FILE_TRANSFER_PORT")
             var lastException: Exception? = null
 
             repeat(SERVER_SOCKET_BIND_RETRIES) { attempt ->
@@ -355,26 +355,26 @@ actual class FileTransferManager(private val context: Context) {
                         bind(InetSocketAddress(FILE_TRANSFER_PORT))
                     }
                     sharedServerSocket = socket
-                    Timber.i("getOrCreateServerSocket: успешно создан (попытка ${attempt + 1})")
+                    Timber.i("Wi-Fi Direct getOrCreateServerSocket: успешно создан (попытка ${attempt + 1})")
                     return socket
                 } catch (e: java.net.BindException) {
                     lastException = e
-                    Timber.w("getOrCreateServerSocket: EADDRINUSE (попытка ${attempt + 1}/$SERVER_SOCKET_BIND_RETRIES) — ждём ${SERVER_SOCKET_BIND_RETRY_DELAY_MS}мс")
+                    Timber.w("Wi-Fi Direct getOrCreateServerSocket: EADDRINUSE (попытка ${attempt + 1}/$SERVER_SOCKET_BIND_RETRIES) — ждём ${SERVER_SOCKET_BIND_RETRY_DELAY_MS}мс")
                     Thread.sleep(SERVER_SOCKET_BIND_RETRY_DELAY_MS)
                 }
             }
 
-            throw lastException ?: Exception("Не удалось создать ServerSocket на порту $FILE_TRANSFER_PORT")
+            throw lastException ?: Exception("Wi-Fi Direct Не удалось создать ServerSocket на порту $FILE_TRANSFER_PORT")
         }
     }
 
     actual fun cancelTransfer(transferId: String) {
-        Timber.i("cancelTransfer: $transferId")
+        Timber.i("Wi-Fi Direct cancelTransfer: $transferId")
 
         // Закрываем sharedServerSocket, чтобы прервать accept() в receiveFile
         val currentState = _transfers.value[transferId]
         if (currentState?.status == FileTransferStatus.TRANSFERRING && !currentState.isSender) {
-            Timber.i("cancelTransfer: прерываем receiveFile — закрываем sharedServerSocket")
+            Timber.i("Wi-Fi Direct cancelTransfer: прерываем receiveFile — закрываем sharedServerSocket")
             synchronized(serverSocketLock) {
                 sharedServerSocket?.runCatching { close() }
                 sharedServerSocket = null
@@ -401,7 +401,7 @@ actual class FileTransferManager(private val context: Context) {
             sharedServerSocket?.runCatching { close() }
             sharedServerSocket = null
         }
-        Timber.i("FileTransferManager cleaned up")
+        Timber.i("Wi-Fi Direct FileTransferManager cleaned up")
     }
 
     // ─── Private Helpers ─────────────────────────────────────────────────────

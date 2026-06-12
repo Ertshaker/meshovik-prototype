@@ -15,7 +15,8 @@ enum class MessageType {
     HEARTBEAT,
     FLOOD,
     /** Сообщение содержит вложение; тяжёлый контент передаётся по Wi-Fi Direct */
-    ATTACHMENT
+    ATTACHMENT,
+    READY_FOR_TRANSFER
 }
 
 /**

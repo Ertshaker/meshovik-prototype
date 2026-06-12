@@ -29,8 +29,11 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import kotlin.coroutines.resume
@@ -162,7 +165,7 @@ class WifiDirectManager(private val context: Context) {
                 }
 
                 WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
-                    Timber.d("WIFI_P2P_PEERS_CHANGED_ACTION received — запрашиваем список peers")
+                    Timber.d("Wi-Fi Direct WIFI_P2P_PEERS_CHANGED_ACTION received — запрашиваем список peers")
                     requestPeers()
                 }
 
@@ -193,7 +196,7 @@ class WifiDirectManager(private val context: Context) {
             intent.getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO)
         }
 
-        Timber.d("WIFI_P2P_CONNECTION_CHANGED_ACTION: isConnected=${networkInfo?.isConnected}")
+        Timber.d("Wi-Fi Direct WIFI_P2P_CONNECTION_CHANGED_ACTION: isConnected=${networkInfo?.isConnected}")
 
         if (networkInfo?.isConnected == true) {
             _isConnected.value = true
@@ -212,7 +215,7 @@ class WifiDirectManager(private val context: Context) {
         addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
         addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
     }
-
+    private val groupMutex = Mutex()
     // ─── Lifecycle ───────────────────────────────────────────────────────────
 
     fun register() {
@@ -282,7 +285,40 @@ class WifiDirectManager(private val context: Context) {
             })
         }
     }
+    @RequiresApi(Build.VERSION_CODES.Q)
+    suspend fun ensureGroupAsOwner(): Boolean = groupMutex.withLock {
+        Timber.i("ensureGroupAsOwner: начинаем процесс становления Group Owner")
 
+        removeGroup()
+
+        Thread.sleep(1500)
+        repeat(3) { attempt ->
+            Timber.i("ensureGroupAsOwner: попытка $attempt создания группы")
+
+            val created = createGroup()  // использует твою текущую реализацию
+
+            if (created) {
+                // Ждём реального подтверждения от системы
+                val info = withTimeoutOrNull(12_000) {
+                    connectionInfo.first { info ->
+                        info?.isGroupOwner == true && info.groupFormed
+                    }
+                }
+
+                if (info != null) {
+                    Timber.i("✅ ensureGroupAsOwner: успешно стали Group Owner. IP=${info.groupOwnerAddress?.hostAddress}")
+                    return true
+                } else {
+                    Timber.w("ensureGroupAsOwner: createGroup success, но не дождались isGroupOwner")
+                }
+            }
+
+            delay(2000L * (attempt + 1)) // экспоненциальная задержка
+        }
+
+        Timber.e("❌ ensureGroupAsOwner: не удалось стать Group Owner после 3 попыток")
+        return false
+    }
     /**
      * Проверяет, что все условия для discovery выполнены, и запускает его.
      * При ошибке повторяет с задержкой.
@@ -457,29 +493,40 @@ class WifiDirectManager(private val context: Context) {
      */
     suspend fun connectToPeer(deviceAddress: String): WifiP2pInfo {
         Timber.i("connectToPeer: $deviceAddress")
+
         return suspendCancellableCoroutine { cont ->
             val config = WifiP2pConfig().apply {
                 this.deviceAddress = deviceAddress
+                // groupOwnerIntent = 0  // 0 = предпочитать быть client'ом
             }
 
             wifiP2pManager.connect(channel, config, object : ActionListener {
                 override fun onSuccess() {
-                    Timber.i("connect.onSuccess() — ждём WIFI_P2P_CONNECTION_CHANGED_ACTION")
-                    // Ждём реального соединения через BroadcastReceiver
+                    Timber.i("connect.onSuccess() — запрос отправлен, ждём WIFI_P2P_CONNECTION_CHANGED_ACTION")
+
+                    // Ждём реального соединения с таймаутом
                     scope.launch {
                         try {
-                            val info = connectionInfoChannel.receive()
-                            if (cont.isActive) cont.resume(info)
+                            val info = withTimeoutOrNull(25_000) {
+                                connectionInfoChannel.receive()
+                            }
+
+                            if (info != null && info.groupFormed) {
+                                Timber.i("connectToPeer: соединение установлено! GroupOwner=${info.isGroupOwner}, IP=${info.groupOwnerAddress?.hostAddress}")
+                                cont.resume(info)
+                            } else {
+                                cont.resumeWithException(Exception("Соединение установлено, но groupFormed=false"))
+                            }
                         } catch (e: Exception) {
-                            if (cont.isActive) cont.resumeWithException(e)
+                            cont.resumeWithException(e)
                         }
                     }
                 }
 
                 override fun onFailure(reason: Int) {
-                    val msg = "Wi-Fi Direct connect failed: ${reasonText(reason)} (code=$reason)"
+                    val msg = "connectToPeer failed: ${reasonText(reason)}"
                     Timber.e(msg)
-                    if (cont.isActive) cont.resumeWithException(Exception(msg))
+                    cont.resumeWithException(Exception(msg))
                 }
             })
         }
@@ -489,16 +536,16 @@ class WifiDirectManager(private val context: Context) {
      * Отключиться от текущей P2P группы.
      */
     fun disconnect() {
-        Timber.i("disconnect: удаляем P2P группу")
+        Timber.i("Wi-Fi Direct disconnect: удаляем P2P группу")
         wifiP2pManager.removeGroup(channel, object : ActionListener {
             override fun onSuccess() {
-                Timber.i("removeGroup: success")
+                Timber.i("Wi-Fi Direct removeGroup: success")
                 _isConnected.value = false
                 _connectionInfo.value = null
             }
 
             override fun onFailure(reason: Int) {
-                Timber.w("removeGroup failed: ${reasonText(reason)}")
+                Timber.w("Wi-Fi Direct removeGroup failed: ${reasonText(reason)}")
             }
         })
     }
@@ -538,13 +585,13 @@ class WifiDirectManager(private val context: Context) {
             val devices = peerList.deviceList.toList()
             _peers.value = devices
 
-            Timber.i("requestPeers: найдено ${devices.size} устройств")
+            Timber.i("Wi-Fi Direct requestPeers: найдено ${devices.size} устройств")
             if (devices.isEmpty()) {
-                Timber.w("PEERS_CHANGED пришёл, но список пустой!")
+                Timber.w("Wi-Fi Direct PEERS_CHANGED пришёл, но список пустой!")
             }
 
             devices.forEach { d ->
-                Timber.i("Peer: ${d.deviceName} | ${d.deviceAddress} | status=${deviceStatusText(d.status)}")
+                Timber.i("Wi-Fi Direct Peer: ${d.deviceName} | ${d.deviceAddress} | status=${deviceStatusText(d.status)}")
             }
         }
     }
@@ -565,26 +612,10 @@ class WifiDirectManager(private val context: Context) {
             }
         }
     }
-    suspend fun createGroupSafely(): Boolean {
-        repeat(2) { attempt ->
-            wifiP2pManager.cancelConnect(channel, null)
 
-            val success = createGroup()  // твоя текущая
-            if (success) {
-                // Ждём реального поднятия группы
-                val info = withTimeoutOrNull(5000) {
-                    connectionInfoChannel.receive()
-                }
-                if (info?.isGroupOwner == true && info.groupFormed) {
-                    Timber.i("createGroupSafely: группа поднята успешно")
-                    return true
-                }
-            }
-        }
-        return false
-    }
     @RequiresApi(Build.VERSION_CODES.Q)
     suspend fun createGroup(): Boolean {
+        Timber.i("Wi-Fi Direct createGroup: Я ЕЁ НАХУЙ УДАЛИЛ")
         return suspendCancellableCoroutine { cont ->
             val config =
                 WifiP2pConfig.Builder()
@@ -595,11 +626,11 @@ class WifiDirectManager(private val context: Context) {
 
             wifiP2pManager.createGroup(channel, config, object : ActionListener {
                 override fun onSuccess() {
-                    Timber.i("createGroup: success")
+                    Timber.i("Wi-Fi Direct createGroup: success")
                     cont.resume(true)
                 }
                 override fun onFailure(reason: Int) {
-                    Timber.e("createGroup failed: ${reasonText(reason)}")
+                    Timber.e("Wi-Fi Direct createGroup failed: ${reasonText(reason)}")
                     cont.resume(false)
                 }
             })
@@ -610,13 +641,13 @@ class WifiDirectManager(private val context: Context) {
         return suspendCancellableCoroutine { cont ->
             wifiP2pManager.removeGroup(channel, object : ActionListener {
                 override fun onSuccess() {
-                    Timber.i("removeGroup: success")
+                    Timber.i("Wi-Fi Direct removeGroup: success")
                     _isConnected.value = false
                     _connectionInfo.value = null
                     cont.resume(true)
                 }
                 override fun onFailure(reason: Int) {
-                    Timber.w("removeGroup failed: ${reasonText(reason)}")
+                    Timber.w("Wi-Fi Direct removeGroup failed: ${reasonText(reason)}")
                     _isConnected.value = false
                     _connectionInfo.value = null
                     cont.resume(true)

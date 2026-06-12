@@ -23,6 +23,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -246,7 +247,15 @@ private fun ImageAttachmentContent(
     onImageClick: (String) -> Unit
 ) {
     val localUri = attachment.localUri
-        ?: transferState?.takeIf { it.status == FileTransferStatus.COMPLETED }?.localUri
+        ?: transferState?.localUri?.takeIf { transferState.status == FileTransferStatus.COMPLETED }
+    val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
+            transferState?.status == FileTransferStatus.PENDING
+
+    val isFailed = transferState?.status == FileTransferStatus.FAILED
+
+    LaunchedEffect(localUri, transferState?.status) {
+        Timber.i("Wi-Fi Direct ImageAttachmentContent → localUri=$localUri | status=${transferState?.status} | attachment.localUri=${attachment.localUri}")
+    }
 
     Box(
         modifier = Modifier
@@ -259,13 +268,37 @@ private fun ImageAttachmentContent(
             // Файл доступен локально — показываем через Coil
             localUri != null -> {
                 AsyncImage(
-                    model = Uri.parse(localUri),
+                    model = localUri.toUri(),
                     contentDescription = attachment.fileName,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clickable { onImageClick(localUri) }
+                        .clickable { onImageClick(localUri) },
+                    onError = {
+                        Timber.e("AsyncImage failed for $localUri")
+                        // Можно показать placeholder при ошибке загрузки
+                    }
                 )
+            }
+            isTransferring -> {
+                ThumbnailWithProgress(
+                    attachment = attachment,
+                    transferState = transferState
+                )
+            }
+
+            // 3. Ошибка
+            isFailed -> {
+                ErrorTransferContent(
+                    attachment = attachment,
+                    transferState = transferState,
+                    participantAddress = participantAddress,
+                    viewModel = viewModel
+                )
+            }
+            // 4. Ожидаем начала приёма
+            else -> {
+                ImagePlaceholder(attachment.fileName)
             }
         }
 
@@ -314,7 +347,41 @@ private fun ImageAttachmentContent(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 }
+@Composable
+private fun ThumbnailWithProgress(
+    attachment: Attachment,
+    transferState: FileTransferState
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Прогресс поверх
+        TransferProgressOverlay(transferState)
+    }
+}
 
+/** Ошибка + кнопка повтора */
+@Composable
+private fun ErrorTransferContent(
+    attachment: Attachment,
+    transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("❌ Ошибка передачи", color = Color.Red)
+            Button(
+                onClick = {
+                    viewModel.retryFileTransfer(attachment.id, participantAddress)
+                }
+            ) {
+                Text("Повторить")
+            }
+        }
+    }
+}
 @Composable
 private fun TransferProgressOverlay(transferState: FileTransferState) {
     Box(

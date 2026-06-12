@@ -13,6 +13,8 @@ import com.meshovik.BleReassembler
 import com.meshovik.BleScanner
 import com.meshovik.core.util.DeviceIdProvider
 import com.meshovik.domain.entity.Attachment
+import com.meshovik.domain.entity.ControlMessageType
+import com.meshovik.domain.entity.MeshControlMessage
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
@@ -53,6 +55,9 @@ class BleManager(
     private val bleAdvertiser = BleAdvertiser(context)
     private val bleChunker = BleChunker(mtu = 20)
     private val bleReassembler = BleReassembler()
+
+    private val _controlMessages = MutableSharedFlow<MeshControlMessage>(extraBufferCapacity = 8)
+    val controlMessages: SharedFlow<MeshControlMessage> = _controlMessages.asSharedFlow()
 
     // Advertisements cache: address -> Advertisement
     private val advertisementsCache = mutableMapOf<String, Advertisement>()
@@ -115,18 +120,34 @@ class BleManager(
             bleGattServer.receivedData.collect { rawData ->
                 Timber.i("GATT Server received ${rawData.size} bytes")
 
-                val messageBytes = bleReassembler.onChunk("GATT_SERVER", rawData)
-                if (messageBytes != null) {
-                    val parsedMessage = parseReceivedData(messageBytes)
-                    if (parsedMessage != null) {
-                        handleReceivedMessage("GATT_SERVER", parsedMessage)   // или source address если есть
-                        Timber.i("✅ Message added to receivedMessages: ${parsedMessage.content}")
-                    }
+                val messageBytes = bleReassembler.onChunk("GATT_SERVER", rawData) ?: return@collect
+
+                // Пытаемся сначала распарсить как ControlMessage
+                val controlMsg = tryParseControlMessage(messageBytes)
+                if (controlMsg != null) {
+                    Timber.i("Received control message: ${controlMsg.type}")
+                    _controlMessages.emit(controlMsg)
+                    return@collect  // ← Важно! Не идём дальше в обычные сообщения
+                }
+
+                // Если не control — парсим как обычное MeshMessage
+                val parsedMessage = parseReceivedData(messageBytes)
+                if (parsedMessage != null) {
+                    handleReceivedMessage("GATT_SERVER", parsedMessage)
+                    Timber.i("✅ Message added to receivedMessages: ${parsedMessage.content}")
                 }
             }
         }
     }
 
+    private fun tryParseControlMessage(data: ByteArray): MeshControlMessage? {
+        return try {
+            val json = data.decodeToString()
+            Json.decodeFromString<MeshControlMessage>(json)
+        } catch (e: Exception) {
+            null  // не control-сообщение — нормально
+        }
+    }
     /**
      * Returns the stable Mesh ID for a given BLE MAC address, or null if not yet known.
      */
@@ -140,6 +161,7 @@ class BleManager(
     /**
      * Observes advertising state changes.
      */
+
     private fun observeAdvertisingState() {
         scope.launch {
             bleAdvertiser.advertisingState.collectLatest { isAdvertising ->
@@ -152,6 +174,7 @@ class BleManager(
             }
         }
     }
+
     fun getBleAddressByMeshId(meshId: String): String? {
         return meshIdToBleMap[meshId]
     }
@@ -341,7 +364,7 @@ class BleManager(
         val job = scope.launch {
             try {
                 device.observe().collectLatest { chunk ->
-                    val message = bleReassembler.onChunk("GATT_SERVER", chunk)
+                    val message = bleReassembler.onChunk(address, chunk)
                     if (message != null) {
                         val parsedMessage = parseReceivedData(message)
                         if (parsedMessage != null) {
@@ -372,6 +395,8 @@ class BleManager(
 
     private fun handleReceivedMessage(sourceBleAddress: String, message: MeshMessage) {
         var finalMessage = message
+
+        // Специальная обработка WIFI_HANDSHAKE (оставляем как есть)
         if (message.content.contains("WIFI_HANDSHAKE")) {
             try {
                 val data = Json.decodeFromString<Map<String, String>>(message.content)
@@ -380,11 +405,7 @@ class BleManager(
                     val senderMeshId = data["meshId"]
 
                     if (!wifiMac.isNullOrBlank()) {
-                        // Сохраняем маппинг BLE → WiFi
-                        // (Можно добавить отдельную мапу в BleManager)
                         Timber.i("✅ Получен Wi-Fi Direct адрес от $sourceBleAddress → $wifiMac")
-
-                        // Обновляем MeshDevice
                         _discoveredDevices.update { devices ->
                             devices.map { device ->
                                 if (device.address == sourceBleAddress) {
@@ -397,27 +418,17 @@ class BleManager(
                         bleToMeshIdMap[sourceBleAddress] = senderMeshId
                         meshIdToBleMap[senderMeshId] = sourceBleAddress
                     }
-                    return // handshake не сохраняем как обычное сообщение
+                    return
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to parse WIFI_HANDSHAKE")
             }
         }
-        // Если senderId выглядит как MeshID — сохраняем маппинг
-        if (message.senderId.startsWith("Mesh") || message.senderId.length > 20) {
-            bleToMeshIdMap[sourceBleAddress] = message.senderId
-            meshIdToBleMap[message.senderId] = sourceBleAddress
-            Timber.i("Mapped: $sourceBleAddress <-> ${message.senderId}")
-        } else {
-            // Если пришёл BLE address — пробуем найти MeshID
-            val meshId = bleToMeshIdMap[sourceBleAddress]
-            if (meshId != null) {
-                finalMessage = message.copy(senderId = meshId)
-            }
-        }
+
         scope.launch {
             _receivedMessages.emit(finalMessage)
         }
+
         Timber.i("✅ Saved message: ${finalMessage.senderId} -> ${finalMessage.receiverId} | ${finalMessage.content}")
     }
 
@@ -593,6 +604,53 @@ class BleManager(
 
         return message
     }
+
+    fun sendReadyForTransfer(targetAddress: String, attachmentId: String) {
+        val controlMsg = MeshControlMessage(
+            type = ControlMessageType.READY_FOR_TRANSFER,
+            attachmentId = attachmentId,
+            senderId = localDeviceAddress,
+            receiverId = targetAddress
+        )
+
+        // Локально эммитим
+        scope.launch {
+            _controlMessages.emit(controlMsg)
+        }
+
+        // === КРИТИЧНОЕ ИСПРАВЛЕНИЕ ===
+        scope.launch {
+            // Правильно определяем реальный BLE адрес получателя
+            val targetBleAddress = when {
+                targetAddress.startsWith("Mesh") -> meshIdToBleMap[targetAddress]
+                else -> targetAddress
+            } ?: run {
+                Timber.e("Cannot find BLE address for target: $targetAddress")
+                return@launch
+            }
+
+            Timber.i("Sending READY_FOR_TRANSFER to MeshID=$targetAddress → BLE=$targetBleAddress")
+
+            val json = Json.encodeToString(controlMsg)
+            val payload = json.encodeToByteArray()
+
+            val packetData = createMeshPacket(
+                packetId = UUID.randomUUID().toString().take(8),
+                ttl = 3,
+                hopCount = 0,
+                payload = payload
+            )
+
+            val sent = sendData(targetBleAddress, packetData)
+
+            if (sent) {
+                Timber.i("✅ READY_FOR_TRANSFER sent successfully to $targetBleAddress")
+            } else {
+                Timber.e("❌ Failed to send READY_FOR_TRANSFER to $targetBleAddress")
+            }
+        }
+    }
+
 
     /**
      * Parses received byte data into a MeshMessage.
