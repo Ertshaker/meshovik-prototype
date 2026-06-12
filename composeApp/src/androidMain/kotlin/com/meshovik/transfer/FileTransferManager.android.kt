@@ -171,34 +171,16 @@ actual class FileTransferManager(private val context: Context) {
                     "Wi-Fi Direct Устройство $targetMeshId не найдено за ${PEER_WAIT_TIMEOUT_MS / 1000}с. " +
                     "Wi-Fi Direct Убедитесь, что оба устройства находятся рядом и Wi-Fi включён."
                 )
-
+            delay(1000)
             Timber.i("Wi-Fi Direct Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
 
             // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
-            val groupOwnerAddress = if (wifiDirectManager.isConnected.value) {
-                Timber.i("Wi-Fi Direct Уже подключены, используем существующее соединение")
-                wifiDirectManager.connectionInfo.value?.groupOwnerAddress?.hostAddress
-                    ?: throw Exception("Wi-Fi Direct Подключены, но GroupOwner IP недоступен")
-            } else {
-                Timber.i("Wi-Fi Direct Подключаемся к ${targetPeer.deviceAddress}...")
-                updateTransfer(
-                    FileTransferState(
-                        transferId = transferId,
-                        status = FileTransferStatus.PENDING,
-                        totalBytes = attachment.sizeBytes,
-                        isSender = true
-                    )
-                )
+            val connectionInfo = withTimeoutOrNull(CONNECTION_TIMEOUT_MS) {
+                wifiDirectManager.connectToPeer(targetPeer.deviceAddress)
+            } ?: throw Exception("Wi-Fi Direct Таймаут подключения к ${targetPeer.deviceAddress} (${CONNECTION_TIMEOUT_MS / 1000}с)")
 
-                val connectionInfo = withTimeoutOrNull(CONNECTION_TIMEOUT_MS) {
-                    wifiDirectManager.connectToPeer(targetPeer.deviceAddress)
-                } ?: throw Exception("Wi-Fi Direct Таймаут подключения к ${targetPeer.deviceAddress} (${CONNECTION_TIMEOUT_MS / 1000}с)")
-
-                connectionInfo.groupOwnerAddress?.hostAddress
-                    ?: throw Exception("Wi-Fi Direct GroupOwner IP недоступен после подключения")
-            }
-
-            Timber.i("Wi-Fi Direct GroupOwner IP: $groupOwnerAddress")
+            val groupOwnerAddress = connectionInfo.groupOwnerAddress?.hostAddress
+                ?: throw Exception("Wi-Fi Direct GroupOwner IP недоступен после подключения")
 
             // ── Шаг 4: Передаём файл ──────────────────────────────────────
             updateTransfer(

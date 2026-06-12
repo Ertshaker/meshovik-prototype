@@ -287,37 +287,8 @@ class WifiDirectManager(private val context: Context) {
     }
     @RequiresApi(Build.VERSION_CODES.Q)
     suspend fun ensureGroupAsOwner(): Boolean = groupMutex.withLock {
-        Timber.i("ensureGroupAsOwner: начинаем процесс становления Group Owner")
-
-        removeGroup()
-
-        Thread.sleep(1500)
-        repeat(3) { attempt ->
-            Timber.i("ensureGroupAsOwner: попытка $attempt создания группы")
-
-            val created = createGroup()  // использует твою текущую реализацию
-
-            if (created) {
-                // Ждём реального подтверждения от системы
-                val info = withTimeoutOrNull(12_000) {
-                    connectionInfo.first { info ->
-                        info?.isGroupOwner == true && info.groupFormed
-                    }
-                }
-
-                if (info != null) {
-                    Timber.i("✅ ensureGroupAsOwner: успешно стали Group Owner. IP=${info.groupOwnerAddress?.hostAddress}")
-                    return true
-                } else {
-                    Timber.w("ensureGroupAsOwner: createGroup success, но не дождались isGroupOwner")
-                }
-            }
-
-            delay(2000L * (attempt + 1)) // экспоненциальная задержка
-        }
-
-        Timber.e("❌ ensureGroupAsOwner: не удалось стать Group Owner после 3 попыток")
-        return false
+        Timber.w("ensureGroupAsOwner: отключён — полагаемся на автоматическое создание группы системой")
+        return true // просто пропускаем
     }
     /**
      * Проверяет, что все условия для discovery выполнены, и запускает его.

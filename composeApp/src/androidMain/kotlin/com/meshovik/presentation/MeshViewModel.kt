@@ -30,6 +30,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
@@ -200,28 +201,24 @@ class MeshViewModel(
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
+    suspend fun ensureGroupAsOwner(participantAddress: String): Boolean {
+        Timber.i("Ensuring Group Owner for chat with $participantAddress")
+        return fileTransferManager.wifiDirectManager.ensureGroupAsOwner()
+    }
+
+    fun startDiscovering() {
+        fileTransferManager.wifiDirectManager.ensureDiscovering()
+    }
+
+
+    @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun handleIncomingAttachment(senderAddress: String, attachment: Attachment) {
         try {
-            Timber.i("Receiver: preparing group for ${attachment.id} $senderAddress")
-
-            val groupReady = fileTransferManager.wifiDirectManager.ensureGroupAsOwner()
-            if (!groupReady) {
-                throw Exception("Не удалось создать Wi-Fi Direct группу")
-            }
-
-            bleManager.sendReadyForTransfer(
-                targetAddress = senderAddress,
-                attachmentId = attachment.id
-            )
-
-            Timber.i("Receiver: sent READY, starting file receive")
             val localUri = fileTransferManager.receiveFile(attachment.id, attachment)
-
             _events.emit(MeshEvent.FileReceived(attachment, localUri))
 
         } catch (e: Exception) {
-            Timber.e(e, "handleIncomingAttachment failed for ${attachment.id}")
-            _events.emit(MeshEvent.Error("Не удалось подготовить приём файла: ${e.message}"))
+            Timber.e(e, "handleIncomingAttachment failed")
         }
     }
     /**
@@ -368,80 +365,39 @@ class MeshViewModel(
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
         scope.launch {
             val targetP2pMac = bleToP2pMac[targetAddress] ?: targetAddress
-
-            // Получаем метаданные один раз
+            Timber.e("Wi-FI Direct ну кароч такое тарегтированный адресс: $targetAddress а вот его p2p адрес: ${bleToP2pMac[targetAddress]}")
             val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
             val (width, height) = getImageDimensions(imageUri)
+            val attachmentId = UUID.randomUUID().toString().take(12)
 
-            var lastException: Exception? = null
+            val attachment = Attachment(
+                id = attachmentId,
+                type = AttachmentType.IMAGE,
+                fileName = fileName,
+                mimeType = mimeType,
+                sizeBytes = sizeBytes,
+                localUri = imageUri.toString(),
+                width = width,
+                height = height
+            )
 
-            repeat(3) { attempt ->
-                val attemptNumber = attempt + 1
-                val attachmentId = UUID.randomUUID().toString().take(12)
+            // Отправляем метаданные
+            val message = bleManager.sendMessageWithAttachment(targetAddress, attachment, caption)
+            meshRepository.addSentMessage(message)
+            _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
+            _events.emit(MeshEvent.MessageSent(message))
 
-                try {
-                    Timber.i("Wi-Fi Direct Попытка отправки изображения $attemptNumber/3 | attachmentId=$attachmentId $targetP2pMac")
-
-                    val attachment = Attachment(
-                        id = attachmentId,
-                        type = AttachmentType.IMAGE,
-                        fileName = fileName,
-                        mimeType = mimeType,
-                        sizeBytes = sizeBytes,
-                        localUri = imageUri.toString(),
-                        width = width,
-                        height = height
-                    )
-
-                    // 1. Отправляем метаданные по BLE
-                    val message = bleManager.sendMessageWithAttachment(
-                        targetAddress = targetAddress,
-                        attachment = attachment,
-                        caption = caption
-                    )
-
-                    meshRepository.addSentMessage(message)
-                    _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
-                    _events.emit(MeshEvent.MessageSent(message))
-
-                    Timber.i("Wi-Fi Direct Ждём READY от получателя (попытка $attemptNumber)...")
-
-                    // 2. Ждём подтверждения готовности группы
-                    val readyEvent = withTimeoutOrNull(35_000) {
-                        _events.filter { event ->
-                            event is MeshEvent.ReadyForTransfer && event.attachmentId == attachmentId
-                        }.first()
-                    }
-
-                    if (readyEvent == null) {
-                        throw Exception("Wi-Fi Direct Получатель не ответил READY за 35 сек (попытка $attemptNumber)")
-                    }
-
-                    Timber.i("Wi-Fi Direct Получен READY → начинаем передачу файла (попытка $attemptNumber)")
-
-                    // 3. Передаём файл
-                    fileTransferManager.sendFile(
-                        attachment = attachment,
-                        localUri = imageUri.toString(),
-                        targetMeshId = targetP2pMac
-                    )
-
-                    Timber.i("Wi-Fi Direct  Изображение успешно отправлено после $attemptNumber попытки")
-                    return@launch // успех — выходим
-
-                } catch (e: Exception) {
-                    lastException = e
-                    Timber.w(e, "Wi-Fi Direct Попытка $attemptNumber провалилась")
-
-                    if (attempt < 2) {
-                        delay(10_000L * attemptNumber)
-                    }
-                }
+            // Sender просто отправляет файл (receiver уже должен быть Group Owner)
+            try {
+                fileTransferManager.sendFile(
+                    attachment = attachment,
+                    localUri = imageUri.toString(),
+                    targetMeshId = targetP2pMac
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "sendFile failed")
+                _events.emit(MeshEvent.Error("Не удалось отправить файл"))
             }
-
-            // Все попытки провалились
-            Timber.e(lastException, "Wi-Fi Direct Не удалось отправить изображение после 3 попыток")
-            _events.emit(MeshEvent.Error("Wi-Fi Direct Не удалось отправить изображение после 3 попыток: ${lastException?.message}"))
         }
     }
 

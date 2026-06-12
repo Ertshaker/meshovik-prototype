@@ -37,6 +37,7 @@ import com.meshovik.domain.entity.MessageType
 import com.meshovik.presentation.MeshViewModel
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.getKoin
 import timber.log.Timber
@@ -75,6 +76,21 @@ data class DirectChatScreen(
         LaunchedEffect(directMessages, participantAddress) {
             Timber.w("CHAT DEBUG: Opened chat with address: $participantAddress")
             Timber.w("CHAT DEBUG: ${directMessages.size} messages")
+        }
+
+        LaunchedEffect(participantAddress) {
+            Timber.i("Chat opened with $participantAddress → becoming Group Owner")
+            launch {
+                try {
+                    val success = viewModel.ensureGroupAsOwner(participantAddress)
+                    if (success) {
+                        viewModel.startDiscovering()
+                        Timber.i("Successfully became Group Owner for chat with $participantAddress")
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to become Group Owner")
+                }
+            }
         }
 
         Scaffold(
