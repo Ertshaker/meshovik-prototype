@@ -24,6 +24,7 @@ fun ChatDrawerContent(
     onChatClick: (Chat) -> Unit,
     onScanningToggle: () -> Unit,
     onCloseDrawer: () -> Unit,
+    wifiDirectPeers: List<android.net.wifi.p2p.WifiP2pDevice> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -88,6 +89,31 @@ fun ChatDrawerContent(
                             }
                         )
                         HorizontalDivider()
+                    }
+                }
+            }
+
+            // Wi-Fi Direct Peers (Debug)
+            if (wifiDirectPeers.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Wi-Fi Direct Peers (${wifiDirectPeers.size})",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        wifiDirectPeers.forEach { peer ->
+                            Text(
+                                text = "• ${peer.deviceName ?: "Unknown"}\n  ${peer.deviceAddress}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
                     }
                 }
             }

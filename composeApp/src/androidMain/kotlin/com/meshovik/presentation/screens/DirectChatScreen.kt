@@ -1,20 +1,45 @@
 package com.meshovik.presentation.screens
 
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import cafe.adriel.voyager.core.screen.Screen
+import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import coil3.compose.AsyncImage
 import com.meshovik.core.util.MeshUtils
+import com.meshovik.domain.entity.Attachment
+import com.meshovik.domain.entity.AttachmentType
 import com.meshovik.domain.entity.MeshMessage
+import com.meshovik.domain.entity.MessageType
 import com.meshovik.presentation.MeshViewModel
+import com.meshovik.transfer.FileTransferState
+import com.meshovik.transfer.FileTransferStatus
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.getKoin
 import timber.log.Timber
 
 data class DirectChatScreen(
@@ -27,7 +52,7 @@ data class DirectChatScreen(
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
-        val viewModel: MeshViewModel = koinViewModel()
+        val viewModel: MeshViewModel = koinScreenModel()
         val navigator = LocalNavigator.currentOrThrow
         val uiState by viewModel.uiState.collectAsState()
         var messageText by remember { mutableStateOf("") }
@@ -37,13 +62,22 @@ data class DirectChatScreen(
         }
 
         val directMessages by messagesFlow.collectAsState()
+
+        // Лаунчер для выбора изображения из галереи (современный API)
+        val imagePickerLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.PickVisualMedia()
+        ) { uri: Uri? ->
+            uri?.let {
+                Timber.i("Image selected: $it")
+                viewModel.sendImage(participantAddress, it)
+            }
+        }
+
         LaunchedEffect(directMessages, participantAddress) {
             Timber.w("CHAT DEBUG: Opened chat with address: $participantAddress")
             Timber.w("CHAT DEBUG: ${directMessages.size} messages")
-            directMessages.forEach { m ->
-                Timber.w("   -> Sender: ${m.senderId} | Receiver: ${m.receiverId} | Content: ${m.content}")
-            }
         }
+
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -68,20 +102,45 @@ data class DirectChatScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(directMessages.reversed()) { message ->
+                        val transferState = message.attachment?.let {
+                            uiState.fileTransfers[it.id]
+                        }
                         DirectMessageItem(
                             message = message,
-                            localDeviceAddress = uiState.localDeviceAddress
+                            localDeviceAddress = uiState.localDeviceAddress,
+                            transferState = transferState,
+                            participantAddress = participantAddress,
+                            viewModel = viewModel,
+                            onImageClick = { imageUri ->
+                                navigator.push(
+                                    FullScreenImageScreen(
+                                        imageUri = imageUri,
+                                        fileName = message.attachment?.fileName ?: ""
+                                    )
+                                )
+                            }
                         )
                     }
                 }
 
+                // Панель ввода
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Кнопка прикрепить изображение
+                    IconButton(
+                        onClick = { imagePickerLauncher.launch(PickVisualMediaRequest()) }
+                    ) {
+                        Text(
+                            text = "🖼",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
+
                     OutlinedTextField(
                         value = messageText,
                         onValueChange = { messageText = it },
@@ -109,7 +168,11 @@ data class DirectChatScreen(
 @Composable
 private fun DirectMessageItem(
     message: MeshMessage,
-    localDeviceAddress: String
+    localDeviceAddress: String,
+    transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel,
+    onImageClick: (String) -> Unit
 ) {
     val isFromMe = message.senderId == localDeviceAddress
 
@@ -121,22 +184,268 @@ private fun DirectMessageItem(
             colors = CardDefaults.cardColors(
                 containerColor = if (isFromMe) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surfaceVariant
-            )
+            ),
+            modifier = Modifier.widthIn(max = 280.dp)
         ) {
             Column(
                 modifier = Modifier.padding(12.dp)
             ) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                when {
+                    // Сообщение с вложением-изображением
+                    message.type == MessageType.ATTACHMENT &&
+                    message.attachment?.type == AttachmentType.IMAGE -> {
+                        ImageAttachmentContent(
+                            attachment = message.attachment,
+                            transferState = transferState,
+                            participantAddress = participantAddress,
+                            viewModel = viewModel,
+                            onImageClick = onImageClick
+                        )
+                        // Подпись (если есть)
+                        if (message.content.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+
+                    // Обычное текстовое сообщение
+                    else -> {
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = MeshUtils.formatTimestamp(message.timestamp),
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.End
                 )
             }
         }
+    }
+}
+
+/**
+ * Контент для сообщения с изображением:
+ * - Если файл уже получен (localUri != null) — показываем превью через Coil
+ * - Если передача идёт — показываем thumbnail (Base64) + прогресс-бар
+ * - Если ожидаем — показываем placeholder
+ */
+@Composable
+private fun ImageAttachmentContent(
+    attachment: Attachment,
+    transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel,
+    onImageClick: (String) -> Unit
+) {
+    val localUri = attachment.localUri
+        ?: transferState?.localUri?.takeIf { transferState.status == FileTransferStatus.COMPLETED }
+    val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
+            transferState?.status == FileTransferStatus.PENDING
+
+    val isFailed = transferState?.status == FileTransferStatus.FAILED
+
+    LaunchedEffect(localUri, transferState?.status) {
+        Timber.i("Wi-Fi Direct ImageAttachmentContent → localUri=$localUri | status=${transferState?.status} | attachment.localUri=${attachment.localUri}")
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 120.dp, max = 240.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        when {
+            // Файл доступен локально — показываем через Coil
+            localUri != null -> {
+                AsyncImage(
+                    model = localUri.toUri(),
+                    contentDescription = attachment.fileName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { onImageClick(localUri) },
+                    onError = {
+                        Timber.e("AsyncImage failed for $localUri")
+                        // Можно показать placeholder при ошибке загрузки
+                    }
+                )
+            }
+            isTransferring -> {
+                ThumbnailWithProgress(
+                    attachment = attachment,
+                    transferState = transferState
+                )
+            }
+
+            // 3. Ошибка
+            isFailed -> {
+                ErrorTransferContent(
+                    attachment = attachment,
+                    transferState = transferState,
+                    participantAddress = participantAddress,
+                    viewModel = viewModel
+                )
+            }
+            // 4. Ожидаем начала приёма
+            else -> {
+                ImagePlaceholder(attachment.fileName)
+            }
+        }
+
+        // Статус ошибки с кнопкой повтора
+        if (transferState?.status == FileTransferStatus.FAILED) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.6f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "❌ Ошибка передачи",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.retryFileTransfer(
+                                transferId = attachment.id,
+                                targetAddress = participantAddress
+                            )
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text("Повторить", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+
+    // Имя файла и размер
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "${attachment.fileName} (${formatFileSize(attachment.sizeBytes)})",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+@Composable
+private fun ThumbnailWithProgress(
+    attachment: Attachment,
+    transferState: FileTransferState
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Прогресс поверх
+        TransferProgressOverlay(transferState)
+    }
+}
+
+/** Ошибка + кнопка повтора */
+@Composable
+private fun ErrorTransferContent(
+    attachment: Attachment,
+    transferState: FileTransferState?,
+    participantAddress: String,
+    viewModel: MeshViewModel
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("❌ Ошибка передачи", color = Color.Red)
+            Button(
+                onClick = {
+                    viewModel.retryFileTransfer(attachment.id, participantAddress)
+                }
+            ) {
+                Text("Повторить")
+            }
+        }
+    }
+}
+@Composable
+private fun TransferProgressOverlay(transferState: FileTransferState) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.4f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(16.dp)
+        ) {
+            if (transferState.progress > 0f) {
+                LinearProgressIndicator(
+                    progress = { transferState.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.White
+                )
+                Text(
+                    text = "${(transferState.progress * 100).toInt()}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            } else {
+                CircularProgressIndicator(color = Color.White)
+                Text(
+                    text = if (transferState.isSender) "Отправка..." else "Получение...",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImagePlaceholder(fileName: String) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "🖼",
+                style = MaterialTheme.typography.displaySmall
+            )
+            Text(
+                text = fileName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 }

@@ -10,14 +10,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.tooling.preview.Preview
-import com.meshovik.presentation.MeshMessengerScreen
+import com.meshovik.presentation.screens.MeshMessengerScreen
 import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +39,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -51,7 +48,7 @@ class MainActivity : ComponentActivity() {
         checkBluetoothEnabled()
 
         setContent {
-            MeshMessengerScreen()
+            MeshMessengerScreen.Content()
         }
     }
 
@@ -83,8 +80,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
 @Preview
 @Composable
 fun AppAndroidPreview() {
-    MeshMessengerScreen()
+    MeshMessengerScreen.Content()
 }

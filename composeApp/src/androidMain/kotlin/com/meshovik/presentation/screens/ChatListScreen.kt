@@ -11,6 +11,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.core.screen.Screen
+import cafe.adriel.voyager.koin.getScreenModel
+import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import com.meshovik.core.util.MeshUtils
@@ -21,6 +23,7 @@ import com.meshovik.presentation.components.ChatDrawerContent
 import com.meshovik.presentation.components.ScanningButton
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.getKoin
 
 object ChatListScreen : Screen {
 
@@ -30,7 +33,7 @@ object ChatListScreen : Screen {
     @Composable
     @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
     override fun Content() {
-        val viewModel: MeshViewModel = koinViewModel()
+        val viewModel: MeshViewModel = koinScreenModel()
         val navigator = LocalNavigator.currentOrThrow
         val uiState by viewModel.uiState.collectAsState()
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -38,8 +41,6 @@ object ChatListScreen : Screen {
 
         // Start advertising and scanning on launch
         LaunchedEffect(Unit)  {
-            viewModel.startMeshService()
-            viewModel.startScanning()
         }
 
         // Build chat list from devices + broadcast
@@ -58,6 +59,7 @@ object ChatListScreen : Screen {
                 ChatDrawerContent(
                     chats = chatList,
                     isScanning = uiState.isScanning,
+                    wifiDirectPeers = uiState.wifiDirectPeers,
                     onChatClick = { chat ->
                         when (chat.type) {
                             ChatType.BROADCAST -> {

@@ -1,7 +1,9 @@
-package com.meshovik.presentation
+package com.meshovik.presentation.screens
 
-import androidx.compose.foundation.background
+import android.Manifest
+import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -13,105 +15,116 @@ import androidx.compose.ui.unit.dp
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
-import org.koin.androidx.compose.koinViewModel
+import cafe.adriel.voyager.koin.koinScreenModel
+import com.meshovik.ble.manager.BleManager
+import com.meshovik.presentation.MeshEvent
+import com.meshovik.presentation.MeshViewModel
+import org.koin.compose.getKoin
+import androidx.compose.runtime.remember
+import cafe.adriel.voyager.core.screen.Screen
 
 /**
  * Main mesh messenger screen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
-@Composable
-fun MeshMessengerScreen(
-    viewModel: MeshViewModel = koinViewModel()
-) {
-    val uiState by viewModel.uiState.collectAsState()
-    var messageText by remember { mutableStateOf("") }
-    var selectedDevice by remember { mutableStateOf<MeshDevice?>(null) }
 
-    // Handle events
-    LaunchedEffect(Unit) {
-        viewModel.events.collect { event ->
-            when (event) {
-                is MeshEvent.ServiceStarted -> { /* Show toast or snackbar */ }
-                is MeshEvent.MessageSent -> { /* Show confirmation */ }
-                is MeshEvent.MessageBroadcast -> { /* Show confirmation */ }
-                is MeshEvent.Error -> { /* Show error */ }
+object MeshMessengerScreen : Screen {
+    private fun readResolve(): Any = MeshMessengerScreen
+    override val key: String = "MeshMessengerScreen"
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @androidx.annotation.RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+    @Composable
+    override fun Content() {
+        val viewModel: MeshViewModel = koinScreenModel()
+        val uiState by viewModel.uiState.collectAsState()
+        var messageText by remember { mutableStateOf("") }
+        var selectedDevice by remember { mutableStateOf<MeshDevice?>(null) }
+
+        // Handle events
+        LaunchedEffect(Unit) {
+            viewModel.events.collect { event ->
+                when (event) {
+                    is MeshEvent.ServiceStarted -> { /* Show toast or snackbar */ }
+                    is MeshEvent.MessageSent -> { /* Show confirmation */ }
+                    is MeshEvent.MessageBroadcast -> { /* Show confirmation */ }
+                    is MeshEvent.Error -> { /* Show error */ }
+                    else -> {}
+                }
+            }
+        }
+
+        // Start mesh service and scanning on launch
+        LaunchedEffect(Unit) {
+        }
+
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Meshovik") },
+                    actions = {
+                        // Scanning toggle
+                        IconButton(onClick = {
+                            if (uiState.isScanning) viewModel.stopScanning()
+                            else viewModel.startScanning()
+                        }) {
+                            Text(if (uiState.isScanning) "⏹" else "🔍")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Status bar
+                StatusCard(
+                    isAdvertising = uiState.isAdvertising,
+                    isScanning = uiState.isScanning,
+                    deviceCount = uiState.devices.size
+                )
+
+                // Device list
+                Text("Discovered Devices (${uiState.devices.size})", style = MaterialTheme.typography.titleMedium)
+                DeviceList(
+                    devices = uiState.devices,
+                    selectedDevice = selectedDevice,
+                    connectionStates = uiState.connectionStates,
+                    onDeviceSelected = { device ->
+                        selectedDevice = device
+                        viewModel.connectToDevice(device)   // ← главное изменение
+                    }
+                )
+
+                // Messages
+                Text("Messages", style = MaterialTheme.typography.titleMedium)
+                MessageList(
+                    messages = uiState.receivedMessages + uiState.sentMessages,
+                    modifier = Modifier.weight(1f)
+                )
+
+                // Message input
+                MessageInput(
+                    text = messageText,
+                    onTextChange = { messageText = it },
+                    onSend = {
+                        if (selectedDevice != null) {
+                            viewModel.sendMessage(selectedDevice!!.address, messageText)
+                        } else {
+                            viewModel.broadcastMessage(messageText)
+                        }
+                        messageText = ""
+                    },
+                    selectedDevice = selectedDevice,
+                    enabled = messageText.isNotBlank()
+                )
             }
         }
     }
 
-    // Start mesh service and scanning on launch
-    LaunchedEffect(Unit) {
-        viewModel.startMeshService()
-        viewModel.startScanning()
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Meshovik") },
-                actions = {
-                    // Scanning toggle
-                    IconButton(onClick = {
-                        if (uiState.isScanning) viewModel.stopScanning()
-                        else viewModel.startScanning()
-                    }) {
-                        Text(if (uiState.isScanning) "⏹" else "🔍")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Status bar
-            StatusCard(
-                isAdvertising = uiState.isAdvertising,
-                isScanning = uiState.isScanning,
-                deviceCount = uiState.devices.size
-            )
-
-            // Device list
-            Text("Discovered Devices (${uiState.devices.size})", style = MaterialTheme.typography.titleMedium)
-            DeviceList(
-                devices = uiState.devices,
-                selectedDevice = selectedDevice,
-                connectionStates = uiState.connectionStates,
-                onDeviceSelected = { device ->
-                    selectedDevice = device
-                    viewModel.connectToDevice(device)   // ← главное изменение
-                }
-            )
-
-            // Messages
-            Text("Messages", style = MaterialTheme.typography.titleMedium)
-            MessageList(
-                messages = uiState.receivedMessages + uiState.sentMessages,
-                modifier = Modifier.weight(1f)
-            )
-
-            // Message input
-            MessageInput(
-                text = messageText,
-                onTextChange = { messageText = it },
-                onSend = {
-                    if (selectedDevice != null) {
-                        viewModel.sendMessage(selectedDevice!!.address, messageText)
-                    } else {
-                        viewModel.broadcastMessage(messageText)
-                    }
-                    messageText = ""
-                },
-                selectedDevice = selectedDevice,
-                enabled = messageText.isNotBlank()
-            )
-        }
-    }
 }
 
 @Composable
@@ -165,7 +178,7 @@ private fun DeviceList(
     devices: List<MeshDevice>,
     selectedDevice: MeshDevice?,
     onDeviceSelected: (MeshDevice) -> Unit,
-    connectionStates: Map<String, com.meshovik.ble.manager.BleManager.ConnectionState>  // добавь
+    connectionStates: Map<String, BleManager.ConnectionState>  // добавь
 ) {
     if (devices.isEmpty()) {
         Text("No devices found...", style = MaterialTheme.typography.bodyMedium)
@@ -192,7 +205,7 @@ private fun DeviceList(
 private fun DeviceItem(
     device: MeshDevice,
     isSelected: Boolean,
-    connectionState: com.meshovik.ble.manager.BleManager.ConnectionState?,
+    connectionState: BleManager.ConnectionState?,
     onClick: () -> Unit
 ) {
     Card(
@@ -220,9 +233,9 @@ private fun DeviceItem(
 
             // Статус подключения
             when (connectionState) {
-                is com.meshovik.ble.manager.BleManager.ConnectionState.Connected ->
+                is BleManager.ConnectionState.Connected ->
                     Text("✅ Connected", color = Color.Green)
-                is com.meshovik.ble.manager.BleManager.ConnectionState.Connecting ->
+                is BleManager.ConnectionState.Connecting ->
                     Text("Connecting...", color = Color.Yellow)
                 else -> Text("Tap to connect", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             }

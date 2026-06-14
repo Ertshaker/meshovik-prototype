@@ -13,11 +13,18 @@ enum class MessageType {
     TEXT,
     ACK,
     HEARTBEAT,
-    FLOOD
+    FLOOD,
+    /** Сообщение содержит вложение; тяжёлый контент передаётся по Wi-Fi Direct */
+    ATTACHMENT,
+    READY_FOR_TRANSFER
 }
 
 /**
  * Represents a message in the BLE Mesh network.
+ * Для сообщений с вложением (type == ATTACHMENT):
+ *  - content содержит текстовое описание / подпись (может быть пустым)
+ *  - attachment содержит метаданные файла
+ *  - сам файл передаётся по Wi-Fi Direct (attachment.id == transferId)
  */
 @Serializable
 data class MeshMessage(
@@ -31,7 +38,10 @@ data class MeshMessage(
     val timestamp: Long = Clock.System.now().toEpochMilliseconds(),
     val status: MeshMessageStatus = MeshMessageStatus.PENDING,
     val ttl: Int = DEFAULT_TTL,
-    val hopCount: Int = 0
+    val hopCount: Int = 0,
+
+    /** Метаданные вложения. Не null только когда type == ATTACHMENT */
+    val attachment: Attachment? = null
 ) {
     companion object {
         const val DEFAULT_TTL = 5

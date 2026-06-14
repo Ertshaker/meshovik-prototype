@@ -12,6 +12,7 @@ data class MeshDevice(
     val id: String,
     val name: String,
     val address: String,
+    val wifiDirectAddress: String?,
     val rssi: Int = 0,
 
     @Contextual
