@@ -101,10 +101,6 @@ class BleManager(
         observeAdvertisingState()
         observeGattServerData()
     }
-
-    /**
-     * Initializes local device info.
-     */
     @SuppressLint("MissingPermission")
     private fun initializeLocalDeviceInfo() {
         localDeviceAddress = deviceIdProvider.getDeviceId()
