@@ -80,7 +80,6 @@ class BleManager(
     private val connectingDevices = mutableSetOf<String>()
 
     private fun isConnecting(address: String): Boolean = connectingDevices.contains(address)
-    // Local device info
     private var localDeviceAddress: String = ""
     private var localDeviceName: String = ""
 
