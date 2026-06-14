@@ -31,6 +31,7 @@ import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import coil3.compose.AsyncImage
+import coil3.toCoilUri
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
@@ -249,9 +250,12 @@ private fun ImageAttachmentContent(
     viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
-    val localUri = attachment.localUri ?: transferState?.localUri?.takeIf {
-        transferState.status == FileTransferStatus.COMPLETED
-    }
+    val localUri = attachment.localUri ?: transferState?.localUri
+
+    val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
+            transferState?.status == FileTransferStatus.PENDING
+
+    val isFailed = transferState?.status == FileTransferStatus.FAILED
 
     Box(
         modifier = Modifier
@@ -271,9 +275,14 @@ private fun ImageAttachmentContent(
                         .clickable { onImageClick(localUri) }
                 )
             }
+            isTransferring -> {
+                ThumbnailWithProgress(
+                    attachment = attachment,
+                    transferState = transferState
+                )
+            }
 
             else -> {
-                // Серый placeholder пока ничего нет
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("🖼", style = MaterialTheme.typography.displayLarge, color = Color.Gray)
                 }

@@ -330,23 +330,19 @@ class MeshViewModel(
                 val (width, height) = getImageDimensions(imageUri)
                 val attachmentId = UUID.randomUUID().toString().take(12)
 
-                val attachment = Attachment(
+                val attachment = Attachment     (
                     id = attachmentId,
                     type = AttachmentType.IMAGE,
                     fileName = fileName,
                     mimeType = mimeType,
                     sizeBytes = sizeBytes,
-                    localUri = null,
+                    localUri = imageUri.toString(),
                     width = width,
                     height = height
                 )
 
                 Timber.i("Nearby Отправляю изображение $targetAddress")
-                val message = bleManager.sendMessageWithAttachment(targetAddress, attachment)
-                meshRepository.addSentMessage(message)
-                _uiState.update {
-                    it.copy(sentMessages = it.sentMessages + message)
-                }
+
                 // Отправляем файл через Nearby
                 fileTransferManager.sendFile(
                     attachment = attachment,

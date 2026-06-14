@@ -8,6 +8,7 @@ import androidx.core.net.toUri
 import coil3.toCoilUri
 import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.asImageBitmap
+import coil3.toAndroidUri
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
@@ -62,7 +63,7 @@ actual class FileTransferManager(
 
     private fun observeFileChunks() {
         scope.launch {
-            bleManager.fileChunksReceived.collect { (sender, transferId, chunk) ->
+            bleManager.fileChunksReceived.collect { (transferId, chunk) ->
                 onImageDataReceived(transferId, chunk)
             }
         }
@@ -76,13 +77,19 @@ actual class FileTransferManager(
         val transferId = attachment.id ?: UUID.randomUUID().toString()
 
         return try {
-            val prepared = ImagePreparer.prepareImage(context, localUri.toUri().toCoilUri())
-            Timber.i( "${prepared.sizeBytes} ВОТ СТОЛЬКО БАЙТ")
+            val androidUri = localUri.toUri()
+            val bytes = context.contentResolver.openInputStream(androidUri)?.use {
+                it.readBytes()
+            } ?: throw IllegalStateException("Не удалось прочитать изображение")
+
+            val fileName = "image_${System.currentTimeMillis()}.jpg"
+            val mimeType = context.contentResolver.getType(androidUri) ?: "image/jpeg"
+
             val finalAttachment = attachment.copy(
                 id = transferId,
-                sizeBytes = prepared.compressedBytes.size.toLong(),
-                fileName = prepared.fileName,
-                mimeType = prepared.mimeType,
+                sizeBytes = bytes.size.toLong(),
+                fileName = fileName,
+                mimeType = mimeType,
                 type = AttachmentType.IMAGE
             )
 
@@ -95,8 +102,8 @@ actual class FileTransferManager(
 
             activeTransfers[transferId] = TransferSession(finalAttachment, isSender = true)
             bleManager.sendMessageWithAttachment(targetMeshId, finalAttachment)
-            delay(2000)
-            sendImageData(transferId, targetMeshId, prepared.compressedBytes)
+            delay(1500)
+            sendImageData(transferId, targetMeshId, bytes)
 
             transferId
         } catch (e: Exception) {
@@ -109,7 +116,7 @@ actual class FileTransferManager(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private suspend fun sendImageData(transferId: String, targetAddress: String, data: ByteArray) {
         val payloadChunks = bleManager.bleChunker.chunk(data)   // только payload
-saveToFileTest(data)
+
         Timber.i("Sending image $transferId → ${payloadChunks.size} chunks (${data.size} bytes), chunkSize=${bleManager.bleChunker.chunkSize}")
 
         payloadChunks.forEachIndexed { index, payload ->
@@ -120,26 +127,15 @@ saveToFileTest(data)
             if (!sent) {
                 Timber.w("Failed to send chunk $index")
             }
-
-            // Задержка для стабильности
-            if (index % 4 == 0 && payloadChunks.size > 8) {
-                delay(12)
-            }
         }
 
         updateTransferState(transferId, FileTransferStatus.COMPLETED, totalBytes = data.size.toLong())
     }
 
-    // ====================== RECEIVER ======================
     fun onImageDataReceived(transferId: String, packet: ByteArray) {
-        if (packet.size < 17 || packet[0] != 0xF1.toByte()) return
-
         val session = activeTransfers[transferId] ?: return
 
-        // Вырезаем 17 байт заголовка
-        val payload = packet.copyOfRange(17, packet.size)
-
-        session.receivedBytes += payload
+        session.receivedBytes += packet
 
         val progress = session.receivedBytes.size.toLong()
 
@@ -153,16 +149,6 @@ saveToFileTest(data)
         Timber.i("File successfully saved: $progress ${session.attachment.sizeBytes}")
         if (progress >= session.attachment.sizeBytes) {
             completeReceiving(transferId, session)
-        }
-    }
-
-    private fun tryDecodePartialImage(bytes: ByteArray): ImageBitmap? {
-        if (bytes.size < 1024) return null
-        return try {
-            val androidBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            androidBitmap?.asImageBitmap()
-        } catch (e: Exception) {
-            null
         }
     }
 
@@ -214,14 +200,6 @@ saveToFileTest(data)
         return file
     }
 
-    private fun saveToFileTest(bytes: ByteArray): File {
-        Timber.i("СОБИРАЮ НАХУЙ ИЗОБРАЖЕНИЕ!!!")
-        val dir = File(context.getExternalFilesDir(null), "MeshImages").apply { mkdirs() }
-        val file = File(dir, "${1244}_$32113321")
-        file.writeBytes(bytes)
-        return file
-    }
-
     // ====================== COMMON ======================
     private fun updateTransferState(
         transferId: String,
@@ -248,7 +226,7 @@ saveToFileTest(data)
 
     private fun createFileChunkPacket(transferId: String, data: ByteArray): ByteArray {
         val type = byteArrayOf(0xF1.toByte()) // IMAGE_CHUNK
-        val idBytes = transferId.toByteArray(Charsets.UTF_8).copyOf(16)
+        val idBytes = transferId.toByteArray(Charsets.UTF_8).copyOf()
         return type + idBytes + data
     }
 

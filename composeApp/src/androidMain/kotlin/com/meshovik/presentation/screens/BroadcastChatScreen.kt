@@ -267,9 +267,7 @@ private fun ImageAttachmentContent(
     viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
-    val localUri = attachment.localUri ?: transferState?.localUri?.takeIf {
-        transferState.status == FileTransferStatus.COMPLETED
-    }
+    val localUri = attachment.localUri ?: transferState?.localUri
 
     Box(
         modifier = Modifier

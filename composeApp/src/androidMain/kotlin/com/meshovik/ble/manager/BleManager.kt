@@ -77,10 +77,10 @@ class BleManager(
     private val _discoveredDevices = MutableStateFlow<List<MeshDevice>>(emptyList())
     val discoveredDevices: StateFlow<List<MeshDevice>> = _discoveredDevices.asStateFlow()
 
-    private val _fileChunksReceived = MutableSharedFlow<Triple<String, String, ByteArray>>(
+    private val _fileChunksReceived = MutableSharedFlow<Pair<String, ByteArray>>(
         extraBufferCapacity = 64
     )
-    val fileChunksReceived: SharedFlow<Triple<String, String, ByteArray>> = _fileChunksReceived.asSharedFlow()
+    val fileChunksReceived: SharedFlow<Pair<String, ByteArray>> = _fileChunksReceived.asSharedFlow()
     private val _receivedMessages = MutableSharedFlow<MeshMessage>(
         extraBufferCapacity = 32,
         replay = 0
@@ -134,18 +134,18 @@ class BleManager(
         if (data.isEmpty()) return
 
         val firstByte = data[0].toInt() and 0xFF
-        Timber.d("handleIncomingRawData from $source: ${data.size} bytes | first=0x${firstByte.toString(16)}")
+        Timber.i("handleIncomingRawData from $source: ${data.size} bytes | first=0x${firstByte.toString(16)}")
 
         // IMAGE CHUNK — ослабляем условие
-        if (firstByte == 0xF1 && data.size >= 17) {
+        if (firstByte == 0xF1) {
             try {
                 val transferId = extractTransferId(data)
-                val chunkData = data.copyOfRange(17, data.size)
+                val chunkData = data.copyOfRange(13, data.size)
 
                 Timber.i("✅ IMAGE CHUNK | transferId=$transferId | ${chunkData.size} bytes")
 
                 scope.launch {
-                    _fileChunksReceived.emit(Triple(source, transferId, chunkData))
+                    _fileChunksReceived.emit(Pair(transferId, chunkData))
                 }
                 return
             } catch (e: Exception) {
@@ -171,8 +171,11 @@ class BleManager(
         Timber.w("Unknown data from $source: ${data.size} bytes, first=0x${firstByte.toString(16)}")
     }
     private fun extractTransferId(data: ByteArray): String {
-        if (data.size < 17) return ""
-        val idBytes = data.copyOfRange(1, 17)
+        if (data.size < 17) {
+            Timber.e("Я ПОЛНЫЙ ДОЛБАЁБ")
+            return ""
+        }
+        val idBytes = data.copyOfRange(1, 13)
         return idBytes.toString(Charsets.UTF_8).trimEnd('\u0000')
     }
 
@@ -609,7 +612,7 @@ class BleManager(
                 device.write(chunk)
                 // Небольшая задержка помогает стабильности при больших передачах
                 if (index % 8 == 0 && chunks.size > 10) {
-                    kotlinx.coroutines.delay(5)
+                    delay(5)
                 }
             }
 
