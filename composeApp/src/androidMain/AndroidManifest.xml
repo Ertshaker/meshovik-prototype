@@ -2,13 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ═══════════════════════════════════════════════════════════════════
-         BLE Permissions
-         ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- Android 12+ (API 31+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="31" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="31" />
@@ -20,34 +14,14 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
+    <uses-permission android:minSdkVersion="37" android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
-    <!-- ═══════════════════════════════════════════════════════════════════
-         Location Permissions
-         Требуется для BLE-сканирования (Android ≤ 12) и Wi-Fi Direct
-         peer discovery (Android ≤ 12). На Android 13+ заменяется
-         NEARBY_WIFI_DEVICES для Wi-Fi Direct.
-         ═══════════════════════════════════════════════════════════════════ -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- ═══════════════════════════════════════════════════════════════════
-         Wi-Fi Direct (P2P) Permissions
-         ═══════════════════════════════════════════════════════════════════ -->
-
-    <!-- Базовые Wi-Fi разрешения — обязательны для Wi-Fi Direct -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!--
-        NEARBY_WIFI_DEVICES (Android 13+, API 33+):
-        Заменяет ACCESS_FINE_LOCATION для Wi-Fi Direct peer discovery.
-        ВАЖНО: НЕ используем neverForLocation здесь, потому что Wi-Fi Direct
-        peer discovery МОЖЕТ использоваться для определения местоположения.
-        Если вы уверены, что не используете его для геолокации — можно добавить
-        android:usesPermissionFlags="neverForLocation", но тогда нужно явно
-        указать это в Privacy Policy.
-    -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         tools:targetApi="33" />
 

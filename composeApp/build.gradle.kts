@@ -68,7 +68,7 @@ kotlin {
 
             // Timber logging
             implementation(libs.timber)
-
+            implementation("com.google.android.gms:play-services-nearby:19.3.0")
             // Voyager Navigation
             implementation(libs.voyager.navigator)
             implementation("cafe.adriel.voyager:voyager-koin:2.2.21-1.10.3")

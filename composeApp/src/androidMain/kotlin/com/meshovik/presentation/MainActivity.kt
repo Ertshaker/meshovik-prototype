@@ -20,7 +20,7 @@ import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
 
-    private val bluetoothPermissionsLauncher = registerForActivityResult(
+    private val permissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val allGranted = permissions.values.all { it }
@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         requestBlePermissions()
+        requestFuckingSlavePermissions()
         checkBluetoothEnabled()
 
         setContent {
@@ -54,7 +55,51 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
+    private fun requestFuckingSlavePermissions() {
+        val REQUIRED_PERMISSIONS: Array<String>
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                REQUIRED_PERMISSIONS =
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.BLUETOOTH_ADVERTISE,
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.ACCESS_WIFI_STATE,
+                        Manifest.permission.CHANGE_WIFI_STATE,
+                        Manifest.permission.NEARBY_WIFI_DEVICES,
+                    )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                REQUIRED_PERMISSIONS =
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH_SCAN,
+                        Manifest.permission.BLUETOOTH_ADVERTISE,
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.ACCESS_WIFI_STATE,
+                        Manifest.permission.CHANGE_WIFI_STATE,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                    )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                REQUIRED_PERMISSIONS =
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH,
+                        Manifest.permission.BLUETOOTH_ADMIN,
+                        Manifest.permission.ACCESS_WIFI_STATE,
+                        Manifest.permission.CHANGE_WIFI_STATE,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                    )
+            } else {
+                REQUIRED_PERMISSIONS =
+                    arrayOf(
+                        Manifest.permission.BLUETOOTH,
+                        Manifest.permission.BLUETOOTH_ADMIN,
+                        Manifest.permission.ACCESS_WIFI_STATE,
+                        Manifest.permission.CHANGE_WIFI_STATE,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    )
+            }
+        permissionsLauncher.launch(REQUIRED_PERMISSIONS)
+    }
     private fun requestBlePermissions() {
         // Собираем все необходимые разрешения в один запрос.
         // Разделение на два запроса (launcher + requestPermissions) приводит к тому,
@@ -76,16 +121,12 @@ class MainActivity : ComponentActivity() {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
             }
 
-            // ACCESS_FINE_LOCATION нужен:
-            // - На Android ≤ 12 для BLE-сканирования И Wi-Fi Direct peer discovery
-            // - На Android 13+ для BLE-сканирования (если BLUETOOTH_SCAN без neverForLocation)
-            // Запрашиваем всегда — лишним не будет
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.toTypedArray()
 
         Timber.i("Requesting permissions: ${permissions.toList()}")
-        bluetoothPermissionsLauncher.launch(permissions)
+        permissionsLauncher.launch(permissions)
     }
 
     private fun checkBluetoothEnabled() {

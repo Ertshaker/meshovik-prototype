@@ -198,6 +198,38 @@ class BleManager(
         return resultFlow
     }
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    fun disconnectFromDevice(address: String) {
+        val targetBleAddress = meshIdToBleMap[address] ?: address
+
+        scope.launch {
+            try {
+                // 1. Отключаем само устройство Kable
+                connectedDevices[targetBleAddress]?.let { device ->
+                    device.disconnect()
+                    Timber.i("🔌 Kable device disconnected: $targetBleAddress")
+                }
+
+                // 2. Отменяем Job наблюдения (самое важное)
+                deviceObservationJobs[targetBleAddress]?.let { job ->
+                    job.cancel()
+                    Timber.i("Cancelled observation job for $targetBleAddress")
+                }
+                deviceObservationJobs.remove(targetBleAddress)
+
+                // 3. Чистим остальные структуры
+                connectedDevices.remove(targetBleAddress)
+                connectingDevices.remove(targetBleAddress)
+
+                _connectionStates.update { it - targetBleAddress }
+
+                Timber.i("✅ Full disconnect and cleanup completed for $targetBleAddress")
+            } catch (e: Exception) {
+                Timber.e(e, "Error during full disconnect of $targetBleAddress")
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun startGattServer() {
         bleGattServer.start()
     }
@@ -213,6 +245,15 @@ class BleManager(
     fun stopMeshService() {
         bleAdvertiser.stopAdvertising()
         _isAdvertising.value = false
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
+    fun stopAdvertising() {
+        bleAdvertiser.stopAdvertising()
+    }
+
+    fun startAdvertising() {
+        bleAdvertiser.startAdvertising()
     }
 
     /**

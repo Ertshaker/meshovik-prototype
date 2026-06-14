@@ -74,7 +74,6 @@ class MeshViewModel(
             observeMessages()
             observeFileTransfers()
             observeIncomingTransfers()
-            observeWifiDirectPeers()
             observeControlMessages()
 
             _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
@@ -83,6 +82,14 @@ class MeshViewModel(
         } else {
             Timber.w("Observers already launched — skipping duplicate subscription")
         }
+
+        bleManager.disconnectFromDevice("skibid")
+        bleManager.stopMeshService()
+        bleManager.stopGattServer()
+        bleManager.stopScanning()
+        bleManager.stopAdvertising()
+
+        fileTransferManager.Advertising()
     }
     private fun observeControlMessages() {
         scope.launch {
@@ -150,13 +157,8 @@ class MeshViewModel(
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun observeMessages() {
         scope.launch {
-            Timber.i(">>> LAUNCH observeMessages")
             bleManager.receivedMessages.collect { message ->
-                if (message.id in processedMessageIds) {
-                    Timber.d("Already processed: ${message.id}")
-                    return@collect
-                }
-
+                if (message.id in processedMessageIds) return@collect
                 processedMessageIds.add(message.id)
 
                 val isOwnMessage = message.senderId == localDeviceAddress ||
@@ -166,31 +168,21 @@ class MeshViewModel(
                     meshRepository.addSentMessage(message)
                     _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
                     Timber.d("Own message echo: ${message.id}")
-                    return@collect  // ← не обрабатываем дальше
+                    return@collect
                 }
 
-                // === Входящее сообщение ===
                 meshRepository.addReceivedMessage(message)
 
-                when {
-                    // 1. Получили метаданные изображения
-                    message.attachment != null -> {
-                        val attachment = message.attachment
-                        if (attachment.id in processingAttachments) {
-                            Timber.w("Duplicate attachment skipped: ${attachment.id}")
-                            return@collect
-                        }
+                message.attachment?.let { attachment ->
+                    if (attachment.id in processingAttachments) return@let
 
-                        processingAttachments.add(attachment.id)
+                    processingAttachments.add(attachment.id)
 
-                        fileTransferManager.notifyIncomingTransfer(attachment)
-
-                        launch {
-                            try {
-                                handleIncomingAttachment(message.senderId, attachment)
-                            } finally {
-                                processingAttachments.remove(attachment.id)
-                            }
+                    launch {
+                        try {
+                            handleIncomingAttachment(message.senderId, attachment)
+                        } finally {
+                            processingAttachments.remove(attachment.id)
                         }
                     }
                 }
@@ -201,24 +193,15 @@ class MeshViewModel(
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
-    suspend fun ensureGroupAsOwner(participantAddress: String): Boolean {
-        Timber.i("Ensuring Group Owner for chat with $participantAddress")
-        return fileTransferManager.wifiDirectManager.ensureGroupAsOwner()
-    }
-
-    fun startDiscovering() {
-        fileTransferManager.wifiDirectManager.ensureDiscovering()
-    }
-
-
-    @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun handleIncomingAttachment(senderAddress: String, attachment: Attachment) {
         try {
-            val localUri = fileTransferManager.receiveFile(attachment.id, attachment)
-            _events.emit(MeshEvent.FileReceived(attachment, localUri))
+            Timber.i("Receiver: starting receive for ${attachment.id}")
 
+            val localUri = fileTransferManager.receiveFile(attachment.id, attachment, senderAddress)
+            _events.emit(MeshEvent.FileReceived(attachment, localUri))
         } catch (e: Exception) {
             Timber.e(e, "handleIncomingAttachment failed")
+            _events.emit(MeshEvent.Error("Не удалось получить файл"))
         }
     }
     /**
@@ -226,16 +209,14 @@ class MeshViewModel(
      */
     private fun observeFileTransfers() {
         scope.launch {
-            Timber.i(">>> LAUNCH observeFileTransfers | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             fileTransferManager.transfers.collect { transfers ->
                 _uiState.update { it.copy(fileTransfers = transfers) }
 
-                // Обновляем сообщения с завершёнными передачами
                 transfers.values
                     .filter { it.status == FileTransferStatus.COMPLETED && !it.isSender }
-                    .forEach { transferState ->
-                        transferState.localUri?.let { uri ->
-                            meshRepository.updateAttachmentLocalUri(transferState.transferId, uri)
+                    .forEach { state ->
+                        state.localUri?.let { uri ->
+                            meshRepository.updateAttachmentLocalUri(state.transferId, uri)
                         }
                     }
             }
@@ -247,37 +228,11 @@ class MeshViewModel(
      */
     private fun observeIncomingTransfers() {
         scope.launch {
-            Timber.i(">>> LAUNCH observeIncomingTransfers | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             fileTransferManager.incomingTransferRequests.collect { attachment ->
-                Timber.i("Incoming transfer request: ${attachment.id}")
                 _events.emit(MeshEvent.IncomingFileTransfer(attachment))
             }
         }
     }
-
-    /**
-     * Observes Wi-Fi Direct peers for debugging.
-     */
-    private fun observeWifiDirectPeers() {
-        scope.launch {
-            Timber.i(">>> LAUNCH observeWifiDirectPeers | thread=${Thread.currentThread().name} | active jobs=${scope.coroutineContext[Job]?.children?.count()}")
-            fileTransferManager.wifiDirectManager.peers.collect { peers ->
-                _uiState.update { it.copy(wifiDirectPeers = peers) }
-
-                // Пытаемся сопоставить с известными BLE устройствами
-                peers.forEach { p2pDevice ->
-                    Timber.d("Wi-Fi Direct peer name=${p2pDevice.deviceName} addr=${p2pDevice.deviceAddress} status=${p2pDevice.status}")
-                    val bleDevice = bleManager.discoveredDevices.value[0]
-
-                    if (bleDevice != null) {
-                        bleToP2pMac[bleDevice.address] = p2pDevice.deviceAddress
-                        Timber.i("Wi-Fi Direct Mapped BLE ${bleDevice.address} → P2P ${p2pDevice.deviceAddress}")
-                    }
-                }
-            }
-        }
-    }
-
     /**
      * Starts the mesh service (advertising + GATT server).
      */
@@ -362,41 +317,44 @@ class MeshViewModel(
      * @param imageUri       URI выбранного изображения
      * @param caption        Подпись (опционально)
      */
+    @RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
-        scope.launch {
-            val targetP2pMac = bleToP2pMac[targetAddress] ?: targetAddress
-            Timber.e("Wi-FI Direct ну кароч такое тарегтированный адресс: $targetAddress а вот его p2p адрес: ${bleToP2pMac[targetAddress]}")
-            val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
-            val (width, height) = getImageDimensions(imageUri)
-            val attachmentId = UUID.randomUUID().toString().take(12)
-
-            val attachment = Attachment(
-                id = attachmentId,
-                type = AttachmentType.IMAGE,
-                fileName = fileName,
-                mimeType = mimeType,
-                sizeBytes = sizeBytes,
-                localUri = imageUri.toString(),
-                width = width,
-                height = height
-            )
-
-            // Отправляем метаданные
-            val message = bleManager.sendMessageWithAttachment(targetAddress, attachment, caption)
-            meshRepository.addSentMessage(message)
-            _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
-            _events.emit(MeshEvent.MessageSent(message))
-
-            // Sender просто отправляет файл (receiver уже должен быть Group Owner)
+        scope.launch{
             try {
+                val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
+                val (width, height) = getImageDimensions(imageUri)
+                val attachmentId = UUID.randomUUID().toString().take(12)
+
+                val attachment = Attachment(
+                    id = attachmentId,
+                    type = AttachmentType.IMAGE,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    sizeBytes = sizeBytes,
+                    localUri = imageUri.toString(),
+                    width = width,
+                    height = height
+                )
+
+                val message = bleManager.sendMessageWithAttachment(targetAddress, attachment, caption)
+delay(3000)
+                meshRepository.addSentMessage(message)
+                _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
+                _events.emit(MeshEvent.MessageSent(message))
+                Timber.i("Nearby Отправляю изображение $targetAddress")
+
+                // Отправляем файл через Nearby
                 fileTransferManager.sendFile(
                     attachment = attachment,
                     localUri = imageUri.toString(),
-                    targetMeshId = targetP2pMac
+                    targetMeshId = targetAddress
                 )
+
+
             } catch (e: Exception) {
-                Timber.e(e, "sendFile failed")
-                _events.emit(MeshEvent.Error("Не удалось отправить файл"))
+                Timber.e(e, "sendImage failed")
+                _events.emit(MeshEvent.Error("Не удалось отправить изображение: ${e.message}"))
+            } finally {
             }
         }
     }
@@ -410,25 +368,14 @@ class MeshViewModel(
      */
     fun retryFileTransfer(transferId: String, targetAddress: String) {
         scope.launch {
-            try {
-                val transferState = fileTransferManager.getTransferState(transferId)
-                if (transferState?.status == FileTransferStatus.FAILED) {
-                    // Находим сообщение с этим attachmentId
-                    val message = _uiState.value.sentMessages.find { it.attachment?.id == transferId }
-                        ?: _uiState.value.receivedMessages.find { it.attachment?.id == transferId }
+            val transferState = fileTransferManager.getTransferState(transferId)
+            if (transferState?.status == FileTransferStatus.FAILED) {
+                val message = _uiState.value.sentMessages.find { it.attachment?.id == transferId }
+                    ?: _uiState.value.receivedMessages.find { it.attachment?.id == transferId }
 
-                    if (message?.attachment != null) {
-                        Timber.i("Retrying file transfer: $transferId")
-                        fileTransferManager.sendFile(
-                            attachment = message.attachment,
-                            localUri = message.attachment.localUri ?: transferState.localUri ?: "",
-                            targetMeshId = targetAddress
-                        )
-                    }
+                message?.attachment?.let {
+                    fileTransferManager.sendFile(it, it.localUri ?: "", targetAddress)
                 }
-            } catch (e: Exception) {
-                Timber.e(e, "retryFileTransfer failed: $transferId")
-                _events.emit(MeshEvent.Error("Повтор отправки не удался: ${e.message}"))
             }
         }
     }
@@ -482,34 +429,6 @@ class MeshViewModel(
     }
 
     // ─── Private helpers ────────────────────────────────────────────────────
-
-    /**
-     * Запускает приём файла по Wi-Fi Direct.
-     */
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun startReceivingFile(attachment: Attachment) {
-        scope.launch {
-            try {
-                fileTransferManager.wifiDirectManager.createGroup()
-                val current = fileTransferManager.getTransferState(attachment.id)
-                if (current?.status == FileTransferStatus.TRANSFERRING ||
-                    current?.status == FileTransferStatus.COMPLETED) {
-                    Timber.i("Wi-Fi Direct File already in progress/completed, skipping")
-                }
-
-                Timber.i("Starting file receive: ${attachment.id}")
-                val localUri = fileTransferManager.receiveFile(
-                    transferId = attachment.id,
-                    attachment = attachment
-                )
-                Timber.i("File received: ${attachment.id} -> $localUri")
-                _events.emit(MeshEvent.FileReceived(attachment, localUri))
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to receive file: ${attachment.id}")
-                _events.emit(MeshEvent.Error("Не удалось получить файл: ${e.message}"))
-            }
-        }
-    }
 
     /**
      * Получает метаданные файла по URI.

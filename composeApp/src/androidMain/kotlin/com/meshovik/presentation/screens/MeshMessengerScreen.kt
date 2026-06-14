@@ -55,8 +55,6 @@ object MeshMessengerScreen : Screen {
 
         // Start mesh service and scanning on launch
         LaunchedEffect(Unit) {
-            viewModel.startMeshService()
-            viewModel.startScanning()
         }
 
         Scaffold(

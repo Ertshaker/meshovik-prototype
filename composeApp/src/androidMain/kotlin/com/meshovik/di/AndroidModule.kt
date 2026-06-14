@@ -19,7 +19,7 @@ val androidModule = module {
     single { BleManager(get()) }
 
     // File Transfer Manager (Wi-Fi Direct)
-    single { FileTransferManager(get()) }
+    single { FileTransferManager(get(), get()) }
 
     // ViewModel
     single(createdAtStart = true)

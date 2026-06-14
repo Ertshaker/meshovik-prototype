@@ -1,5 +1,6 @@
 package com.meshovik.transfer
 
+import com.juul.kable.Filter
 import com.meshovik.domain.entity.Attachment
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,7 +51,8 @@ expect class FileTransferManager {
      */
     suspend fun receiveFile(
         transferId: String,
-        attachment: Attachment
+        attachment: Attachment,
+        senderAddress: String
     ): String
 
     /**

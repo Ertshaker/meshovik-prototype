@@ -41,8 +41,6 @@ object ChatListScreen : Screen {
 
         // Start advertising and scanning on launch
         LaunchedEffect(Unit)  {
-            viewModel.startMeshService()
-            viewModel.startScanning()
         }
 
         // Build chat list from devices + broadcast

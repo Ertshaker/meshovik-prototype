@@ -1,8 +1,29 @@
 package com.meshovik.transfer
 
+import android.Manifest
 import android.content.Context
-import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.annotation.RequiresPermission
+import androidx.core.net.toUri
+import com.google.android.gms.nearby.Nearby
+import com.google.android.gms.nearby.connection.AdvertisingOptions
+import com.google.android.gms.nearby.connection.ConnectionInfo
+import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
+import com.google.android.gms.nearby.connection.ConnectionResolution
+import com.google.android.gms.nearby.connection.ConnectionType
+import com.google.android.gms.nearby.connection.ConnectionsStatusCodes
+import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
+import com.google.android.gms.nearby.connection.DiscoveryOptions
+import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
+import com.google.android.gms.nearby.connection.Payload
+import com.google.android.gms.nearby.connection.PayloadCallback
+import com.google.android.gms.nearby.connection.PayloadTransferUpdate
+import com.google.android.gms.nearby.connection.Strategy
+import com.meshovik.ble.manager.BleManager
 import com.meshovik.domain.entity.Attachment
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,41 +33,18 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.OutputStream
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
-import androidx.core.net.toUri
+import java.util.concurrent.ConcurrentHashMap
+
 
 // ─── Константы ──────────────────────────────────────────────────────────────
-
-/** Порт для передачи файлов по Wi-Fi Direct */
-private const val FILE_TRANSFER_PORT = 8988
-
-/** Размер буфера чтения/записи */
-private const val BUFFER_SIZE = 65536 // 64 KB
-
-/** Таймаут ожидания появления нужного peer в списке (мс) */
-private const val PEER_WAIT_TIMEOUT_MS = 20_000L
-
-/** Таймаут ожидания установки P2P соединения (мс) */
-private const val CONNECTION_TIMEOUT_MS = 30_000L
-
-/** Максимальное число попыток открыть ServerSocket при EADDRINUSE */
-private const val SERVER_SOCKET_BIND_RETRIES = 5
-
-/** Задержка между попытками bind (мс) */
-private const val SERVER_SOCKET_BIND_RETRY_DELAY_MS = 1_000L
 
 /**
  * Android-реализация FileTransferManager через Wi-Fi Direct (WifiP2p).
@@ -62,454 +60,334 @@ private const val SERVER_SOCKET_BIND_RETRY_DELAY_MS = 1_000L
  * - GroupOwner — устройство, которое создаёт P2P группу и имеет известный IP
  * - Не-GroupOwner подключается к GroupOwner по его IP
  */
-actual class FileTransferManager(private val context: Context) {
 
+actual class FileTransferManager(private val context: Context, private val bleManager: BleManager) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    val wifiDirectManager = WifiDirectManager(context)
+    private val client = Nearby.getConnectionsClient(context)
 
     private val _transfers = MutableStateFlow<Map<String, FileTransferState>>(emptyMap())
     actual val transfers: StateFlow<Map<String, FileTransferState>> = _transfers.asStateFlow()
 
-    private val _incomingTransferRequests = MutableSharedFlow<Attachment>(extraBufferCapacity = 16)
+    private val _incomingTransferRequests = MutableSharedFlow<Attachment>(extraBufferCapacity = 8)
     actual val incomingTransferRequests: Flow<Attachment> = _incomingTransferRequests
 
-    /** Активные ServerSocket для приёма файлов: transferId -> ServerSocket */
-    private val serverSockets = mutableMapOf<String, ServerSocket>()
+    private val connectionStates = mutableMapOf<String, ConnectionState>()
 
-    /**
-     * Глобальный ServerSocket, переиспользуемый между передачами.
-     * Создаётся один раз при первом вызове [receiveFile] и живёт до [cleanup].
-     * Это полностью устраняет EADDRINUSE — порт не освобождается между передачами.
-     */
-    @Volatile
-    private var sharedServerSocket: ServerSocket? = null
-    private val serverSocketLock = Any()
+    enum class ConnectionState {
+        PENDING_OUTGOING,   // мы запросили
+        PENDING_INCOMING,   // к нам запросили
+        CONNECTED,
+        REJECTED
+    }
 
+    // endpointId -> Connection info
+    private val activeEndpoints = ConcurrentHashMap<String, String>() // endpointId -> transferId
+    private val outputStreams = ConcurrentHashMap<String, FileOutputStream>() // transferId -> stream
+
+    private val SERVICE_ID = "com.meshovik.mesh"
     init {
-        wifiDirectManager.register()
+        Timber.i("Nearby Connections Manager initialized")
 
-        // Логируем сообщения пользователю из WifiDirectManager
-        scope.launch {
-            wifiDirectManager.userMessages.collect { message ->
-                Timber.i("WifiDirect → UI: $message")
-                // Здесь можно пробросить в UI через отдельный SharedFlow, если нужно
-            }
-        }
-
-        // Логируем изменения состояния discovery
-        scope.launch {
-            wifiDirectManager.discoveryState.collect { state ->
-                Timber.d("DiscoveryState changed: $state")
-            }
-        }
     }
 
-    /**
-     * Уведомить менеджер о входящем запросе на передачу файла (вызывается из BleManager).
-     * Это позволяет UI показать "Получаем изображение..." и запустить receiveFile().
-     */
-    fun notifyIncomingTransfer(attachment: Attachment) {
-        scope.launch {
-            _incomingTransferRequests.emit(attachment)
-            Thread.sleep(2000)
-            updateTransfer(
-                FileTransferState(
-                    transferId = attachment.id,
-                    status = FileTransferStatus.PENDING,
-                    totalBytes = attachment.sizeBytes,
-                    isSender = false
-                )
-            )
-            Timber.i("Incoming transfer notified: ${attachment.id} (${attachment.fileName})")
-        }
+    fun Advertising() {
+        client.stopAllEndpoints()
+        client.stopAdvertising()
+        startAdvertising("skibidi")
     }
 
-    /**
-     * Отправить файл по Wi-Fi Direct.
-     *
-     * ## Алгоритм
-     * 1. Запускаем discovery через [WifiDirectManager.ensureDiscovering]
-     * 2. Ждём появления нужного peer (по MAC-адресу) до [PEER_WAIT_TIMEOUT_MS]
-     * 3. Если peer не найден — бросаем исключение с понятным сообщением
-     * 4. Подключаемся к peer через [WifiDirectManager.connectToPeer]
-     * 5. Получаем GroupOwner IP и передаём файл через TCP-сокет
-     *
-     * @param attachment Метаданные файла
-     * @param localUri URI файла на устройстве отправителя
-     * @param targetMeshId MAC-адрес Wi-Fi Direct устройства получателя
-     * @return transferId при успехе
-     */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
     actual suspend fun sendFile(
         attachment: Attachment,
         localUri: String,
         targetMeshId: String
     ): String {
         val transferId = attachment.id
-        Timber.i("Wi-Fi Direct sendFile → transferId=$transferId | file=${attachment.fileName} | target=$targetMeshId")
+        Timber.i("Nearby sendFile → $transferId to $targetMeshId")
+        bleManager.disconnectFromDevice(targetMeshId)
+        bleManager.stopGattServer()
+        bleManager.stopScanning()
+        bleManager.stopAdvertising()
 
-        updateTransfer(
-            FileTransferState(
-                transferId = transferId,
-                status = FileTransferStatus.PENDING,
-                totalBytes = attachment.sizeBytes,
-                isSender = true
-            )
-        )
+        updateTransfer(transferId, FileTransferStatus.PENDING, attachment.sizeBytes, true)
+        Timber.i("Отключил всё дерьмо")
 
         try {
-            // ── Шаг 1: Убеждаемся, что discovery запущен ──────────────────
-            ensureP2pEnabled()
-
-            if (wifiDirectManager.discoveryState.value != DiscoveryState.DISCOVERING) {
-                wifiDirectManager.ensureDiscovering()
-            }
-
-            // ── Шаг 2: Ждём появления нужного peer ────────────────────────
-            val targetPeer = waitForPeer(targetMeshId)
-                ?: throw Exception(
-                    "Wi-Fi Direct Устройство $targetMeshId не найдено за ${PEER_WAIT_TIMEOUT_MS / 1000}с. " +
-                    "Wi-Fi Direct Убедитесь, что оба устройства находятся рядом и Wi-Fi включён."
-                )
-            delay(1000)
-            Timber.i("Wi-Fi Direct Peer найден: name=${targetPeer.deviceName}, addr=${targetPeer.deviceAddress}")
-
-            // ── Шаг 3: Подключаемся, если ещё не подключены ───────────────
-            val connectionInfo = withTimeoutOrNull(CONNECTION_TIMEOUT_MS) {
-                wifiDirectManager.connectToPeer(targetPeer.deviceAddress)
-            } ?: throw Exception("Wi-Fi Direct Таймаут подключения к ${targetPeer.deviceAddress} (${CONNECTION_TIMEOUT_MS / 1000}с)")
-
-            val groupOwnerAddress = connectionInfo.groupOwnerAddress?.hostAddress
-                ?: throw Exception("Wi-Fi Direct GroupOwner IP недоступен после подключения")
-
-            // ── Шаг 4: Передаём файл ──────────────────────────────────────
-            updateTransfer(
-                FileTransferState(
-                    transferId = transferId,
-                    status = FileTransferStatus.TRANSFERRING,
-                    totalBytes = attachment.sizeBytes,
-                    isSender = true
-                )
-            )
+            startAdvertising(transferId)
+            startDiscovery(targetMeshId, transferId)
 
             val uri = localUri.toUri()
             val inputStream = context.contentResolver.openInputStream(uri)
-                ?: throw Exception("Wi-Fi Direct Не удалось открыть файл: $localUri")
+                ?: throw Exception("Не удалось открыть файл")
 
-            sendFileOverSocket(
-                transferId = transferId,
-                inputStream = inputStream,
-                totalBytes = attachment.sizeBytes,
-                hostAddress = groupOwnerAddress,
-                port = FILE_TRANSFER_PORT
-            )
+            val payload = Payload.fromStream(inputStream)
+            activeEndpoints.forEach { (endpointId, _) ->
+                client.sendPayload(endpointId, payload)
+                Timber.i("Sent payload to $endpointId")
+            }
 
-            // ── Шаг 5: Успех ──────────────────────────────────────────────
-            updateTransfer(
-                FileTransferState(
-                    transferId = transferId,
-                    status = FileTransferStatus.COMPLETED,
-                    progressBytes = attachment.sizeBytes,
-                    totalBytes = attachment.sizeBytes,
-                    localUri = localUri,
-                    isSender = true
-                )
-            )
-
-            Timber.i("Wi-Fi Direct sendFile: файл успешно отправлен: $transferId")
+            updateTransfer(transferId, FileTransferStatus.COMPLETED, attachment.sizeBytes, true, localUri = localUri)
             return transferId
-
         } catch (e: Exception) {
-            Timber.e(e, "Wi-Fi Direct sendFile failed: $transferId")
-            updateTransfer(
-                FileTransferState(
-                    transferId = transferId,
-                    status = FileTransferStatus.FAILED,
-                    totalBytes = attachment.sizeBytes,
-                    errorMessage = e.message,
-                    isSender = true
-                )
-            )
+            Timber.e(e, "sendFile failed")
+            updateTransfer(transferId, FileTransferStatus.FAILED, attachment.sizeBytes, true, e.message)
             throw e
         }
     }
 
-    /**
-     * Принять входящий файл по Wi-Fi Direct.
-     *
-     * Использует глобальный [sharedServerSocket], который создаётся один раз
-     * и переиспользуется между передачами — это устраняет EADDRINUSE.
-     *
-     * Если сокет по какой-то причине закрыт — пересоздаёт его с retry.
-     */
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
     actual suspend fun receiveFile(
         transferId: String,
-        attachment: Attachment
+        attachment: Attachment,
+        senderAddress: String
     ): String {
-        Timber.i("receiveFile started: $transferId")
-        wifiDirectManager.ensureDiscovering()
+        Timber.i("Nearby receiveFile started: $transferId")
+        bleManager.disconnectFromDevice(senderAddress)
+        bleManager.stopGattServer()
+        bleManager.stopScanning()
+        bleManager.stopAdvertising()
+
         updateTransfer(
-            FileTransferState(
-                transferId = transferId,
-                status = FileTransferStatus.TRANSFERRING,
-                totalBytes = attachment.sizeBytes,
-                isSender = false
-            )
+            transferId = transferId,
+            status = FileTransferStatus.TRANSFERRING,
+            totalBytes = attachment.sizeBytes,
+            isSender = false
         )
 
+
+        Timber.i("Отключил всё дерьмо")
+        // Запускаем advertising, чтобы sender мог подключиться
+        startAdvertising(senderAddress)
+
         return withContext(Dispatchers.IO) {
-            var clientSocket: Socket? = null
+            val outputFile = createOutputFile(attachment)
+            val outputStream = FileOutputStream(outputFile)
+            outputStreams[transferId] = outputStream
+
+            // Ждём завершения передачи через SharedFlow / callback
+            val completionDeferred = CompletableDeferred<String>()
+
+            // Временный listener для этого transferId
+            val job = scope.launch {
+                // Здесь можно использовать отдельный flow, но для простоты используем delay + проверку
+                // В реальной версии лучше использовать channel или SharedFlow
+                try {
+                    withTimeout(90_000) { // 1.5 минуты таймаут
+                        while (isActive) {
+                            val state = _transfers.value[transferId]
+                            if (state?.status == FileTransferStatus.COMPLETED) {
+                                completionDeferred.complete(state.localUri ?: outputFile.toUri().toString())
+                                return@withTimeout
+                            }
+                            if (state?.status == FileTransferStatus.FAILED) {
+                                completionDeferred.completeExceptionally(Exception(state.errorMessage))
+                                return@withTimeout
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    completionDeferred.completeExceptionally(e)
+                }
+            }
 
             try {
-                Timber.i("Wi-Fi Direct receiveFile: создаём P2P группу (становимся Group Owner)")
-
-                val serverSocket = getOrCreateServerSocket()
-                Timber.i("Wi-Fi Direct receiveFile: слушаем порт $FILE_TRANSFER_PORT для $transferId")
-
-                clientSocket = serverSocket.accept()
-                Timber.i("Wi-Fi Direct receiveFile: клиент подключился: ${clientSocket.inetAddress?.hostAddress}")
-
-                val outputFile = createOutputFile(attachment)
-                val outputStream = FileOutputStream(outputFile)
-
-                receiveFileFromSocket(transferId, clientSocket, outputStream, attachment.sizeBytes)
-
-                val localUri = Uri.fromFile(outputFile).toString()
-
-                updateTransfer(
-                    FileTransferState(
-                        transferId = transferId,
-                        status = FileTransferStatus.COMPLETED,
-                        progressBytes = attachment.sizeBytes,
-                        totalBytes = attachment.sizeBytes,
-                        localUri = localUri,
-                        isSender = false
-                    )
-                )
-
-                Timber.i("Wi-Fi Direct receiveFile: файл получен: $transferId → $localUri")
+                val localUri = completionDeferred.await()
+                Timber.i("Nearby receiveFile completed: $transferId → $localUri")
                 localUri
-
             } catch (e: Exception) {
-                Timber.e(e, "Wi-Fi Direct receiveFile failed: $transferId")
-                // Если сокет сломан — сбрасываем его, чтобы следующий вызов пересоздал
-                if (e is java.net.SocketException || e is java.io.IOException) {
-                    Timber.w("Wi-Fi Direct receiveFile: сбрасываем sharedServerSocket из-за ошибки сокета")
-                    synchronized(serverSocketLock) {
-                        sharedServerSocket?.runCatching { close() }
-                        sharedServerSocket = null
-                    }
-                }
-                updateTransfer(
-                    FileTransferState(
-                        transferId = transferId,
-                        status = FileTransferStatus.FAILED,
-                        errorMessage = e.message
-                    )
-                )
+                Timber.e(e, "receiveFile failed")
+                updateTransfer(transferId, FileTransferStatus.FAILED, attachment.sizeBytes, false, error = e.message)
                 throw e
             } finally {
-                // Закрываем только клиентский сокет, НЕ serverSocket
-                clientSocket?.runCatching { close() }
+                job.cancel()
+                outputStreams.remove(transferId)?.close()
             }
-        }
-    }
-
-    /**
-     * Возвращает существующий ServerSocket или создаёт новый.
-     * При EADDRINUSE повторяет попытку [SERVER_SOCKET_BIND_RETRIES] раз.
-     */
-    private fun getOrCreateServerSocket(): ServerSocket {
-        synchronized(serverSocketLock) {
-            val existing = sharedServerSocket
-            if (existing != null && !existing.isClosed) {
-                Timber.d("Wi-Fi Direct getOrCreateServerSocket: переиспользуем существующий сокет на порту $FILE_TRANSFER_PORT")
-                return existing
-            }
-
-            Timber.i("Wi-Fi Direct getOrCreateServerSocket: создаём новый ServerSocket на порту $FILE_TRANSFER_PORT")
-            var lastException: Exception? = null
-
-            repeat(SERVER_SOCKET_BIND_RETRIES) { attempt ->
-                try {
-                    val socket = ServerSocket().apply {
-                        reuseAddress = true
-                        bind(InetSocketAddress(FILE_TRANSFER_PORT))
-                    }
-                    sharedServerSocket = socket
-                    Timber.i("Wi-Fi Direct getOrCreateServerSocket: успешно создан (попытка ${attempt + 1})")
-                    return socket
-                } catch (e: java.net.BindException) {
-                    lastException = e
-                    Timber.w("Wi-Fi Direct getOrCreateServerSocket: EADDRINUSE (попытка ${attempt + 1}/$SERVER_SOCKET_BIND_RETRIES) — ждём ${SERVER_SOCKET_BIND_RETRY_DELAY_MS}мс")
-                    Thread.sleep(SERVER_SOCKET_BIND_RETRY_DELAY_MS)
-                }
-            }
-
-            throw lastException ?: Exception("Wi-Fi Direct Не удалось создать ServerSocket на порту $FILE_TRANSFER_PORT")
         }
     }
 
     actual fun cancelTransfer(transferId: String) {
-        Timber.i("Wi-Fi Direct cancelTransfer: $transferId")
-
-        // Закрываем sharedServerSocket, чтобы прервать accept() в receiveFile
-        val currentState = _transfers.value[transferId]
-        if (currentState?.status == FileTransferStatus.TRANSFERRING && !currentState.isSender) {
-            Timber.i("Wi-Fi Direct cancelTransfer: прерываем receiveFile — закрываем sharedServerSocket")
-            synchronized(serverSocketLock) {
-                sharedServerSocket?.runCatching { close() }
-                sharedServerSocket = null
-            }
-        }
-
-        updateTransfer(
-            _transfers.value[transferId]?.copy(status = FileTransferStatus.CANCELLED)
-                ?: FileTransferState(transferId = transferId, status = FileTransferStatus.CANCELLED)
-        )
+        client.stopAllEndpoints()
+        outputStreams.remove(transferId)?.close()
+        updateTransfer(transferId, FileTransferStatus.CANCELLED)
     }
 
-    actual fun getTransferState(transferId: String): FileTransferState? {
-        return _transfers.value[transferId]
-    }
+    actual fun getTransferState(transferId: String): FileTransferState? = _transfers.value[transferId]
 
     actual fun cleanup() {
-        serverSockets.values.forEach { socket ->
-            socket.runCatching { close() }
-        }
-        serverSockets.clear()
-        // Закрываем глобальный ServerSocket
-        synchronized(serverSocketLock) {
-            sharedServerSocket?.runCatching { close() }
-            sharedServerSocket = null
-        }
-        Timber.i("Wi-Fi Direct FileTransferManager cleaned up")
+        client.stopAllEndpoints()
+        outputStreams.values.forEach { it.close() }
+        outputStreams.clear()
+        activeEndpoints.clear()
     }
 
-    // ─── Private Helpers ─────────────────────────────────────────────────────
+    private fun startAdvertising(transferId: String) {
+        val options = AdvertisingOptions.Builder()
+            .setStrategy(Strategy.P2P_POINT_TO_POINT)
+            .setConnectionType(ConnectionType.DISRUPTIVE)
+            .build()
 
-    /**
-     * Проверяет, что Wi-Fi P2P включён.
-     * Если нет — ждёт включения до 15 секунд.
-     */
-    private suspend fun ensureP2pEnabled() {
-        if (wifiDirectManager.p2pEnabled.value) return
-
-        Timber.w("ensureP2pEnabled: Wi-Fi P2P выключен, ждём...")
-        val enabled = withTimeoutOrNull(15_000L) {
-            wifiDirectManager.p2pEnabled.first { it }
-        }
-
-        if (enabled == null) {
-            throw Exception(
-                "Wi-Fi P2P недоступен. Включите Wi-Fi на устройстве и повторите попытку."
-            )
-        }
-        Timber.i("ensureP2pEnabled: Wi-Fi P2P включился")
+        client.startAdvertising(
+            "Mesh_${transferId.take(1)}",
+            SERVICE_ID,
+            connectionLifecycleCallback,
+            options
+        ).addOnSuccessListener { Timber.i("Advertising started") }
+            .addOnFailureListener { Timber.e(it, "Advertising failed") }
     }
 
-    /**
-     * Ждёт появления нужного peer в списке обнаруженных устройств.
-     *
-     * @param deviceAddress MAC-адрес Wi-Fi Direct устройства
-     * @return [WifiP2pDevice] если найден, null если таймаут
-     */
-    private suspend fun waitForPeer(deviceAddress: String): android.net.wifi.p2p.WifiP2pDevice? {
-        Timber.i("waitForPeer: ищем $deviceAddress (таймаут ${PEER_WAIT_TIMEOUT_MS / 1000}с)")
+    private fun startDiscovery(targetId: String, transferId: String) {
+        connectionStates.clear()
+        val options = DiscoveryOptions.Builder()
+            .setStrategy(Strategy.P2P_POINT_TO_POINT)
+            .build()
 
-        return withTimeoutOrNull(PEER_WAIT_TIMEOUT_MS) {
-            wifiDirectManager.peers.first { list ->
-                list.any { it.deviceAddress.equals(deviceAddress, ignoreCase = true) }
-            }.find { it.deviceAddress.equals(deviceAddress, ignoreCase = true) }
+        client.startDiscovery(SERVICE_ID, endpointDiscoveryCallback, options)
+            .addOnSuccessListener { Timber.i("Discovery started") }
+    }
+    private fun acceptConnectionSafely(endpointId: String) {
+        // Небольшая задержка часто помогает при race condition
+        Handler(Looper.getMainLooper()).postDelayed({
+            client.acceptConnection(endpointId, payloadCallback)
+        }, 120) // 80–200 мс обычно достаточно
+    }
+    private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
+        override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+            Timber.i("Connection initiated from $endpointId")
+            val currentState = connectionStates[endpointId]
+
+            // Если мы уже отправили запрос — просто принимаем
+            if (currentState == ConnectionState.PENDING_OUTGOING) {
+                Timber.d("Мы уже инициировали — принимаем")
+                acceptConnectionSafely(endpointId)
+                return
+            }
+            connectionStates[endpointId] = ConnectionState.PENDING_INCOMING
+            client.acceptConnection(endpointId, payloadCallback)
+        }
+
+        override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
+            when (resolution.status.statusCode) {
+                ConnectionsStatusCodes.STATUS_OK -> {
+                    Timber.i("✅ Соединение установлено: $endpointId")
+                    connectionStates[endpointId] = ConnectionState.CONNECTED
+                }
+                ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED -> {
+                    Timber.w("❌ Отклонено: $endpointId")
+                    connectionStates[endpointId] = ConnectionState.REJECTED
+                }
+                else -> {
+                    Timber.e("Ошибка соединения $endpointId: ${resolution.status}")
+                    connectionStates.remove(endpointId) // можно retry позже
+                }
+            }
+        }
+
+        override fun onDisconnected(endpointId: String) {
+            Timber.i("Disconnected from $endpointId")
+            activeEndpoints.remove(endpointId)
         }
     }
 
-    private fun updateTransfer(state: FileTransferState) {
+    private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
+        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+            Timber.i("Found endpoint: $endpointId (${info.endpointName})")
+            if (connectionStates.containsKey(endpointId)) {
+                Timber.d("Уже есть соединение/запрос к $endpointId — пропускаем")
+                return
+            }
+
+            connectionStates[endpointId] = ConnectionState.PENDING_OUTGOING
+            client.stopDiscovery()
+            client.requestConnection(info.endpointName, endpointId, connectionLifecycleCallback)
+        }
+
+        override fun onEndpointLost(endpointId: String) {
+            Timber.i("Endpoint lost: $endpointId")
+            connectionStates.remove(endpointId)
+            bleManager.startMeshService()
+        }
+    }
+
+    private val payloadCallback = object : PayloadCallback() {
+        override fun onPayloadReceived(endpointId: String, payload: Payload) {
+            val transferId = activeEndpoints[endpointId] ?: return
+
+            if (payload.type == Payload.Type.FILE) {
+                // TODO: обработка больших файлов
+                Timber.i("Received file payload for $transferId")
+            }
+        }
+
+        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+            val transferId = activeEndpoints[endpointId] ?: return
+
+            when (update.status) {
+                PayloadTransferUpdate.Status.SUCCESS -> {
+                    Timber.i("Payload transfer SUCCESS for $transferId")
+
+                    val outputStream = outputStreams.remove(transferId)
+                    outputStream?.close()
+
+                    val outputFile = createOutputFile(Attachment(
+                        id = transferId,
+                        type = com.meshovik.domain.entity.AttachmentType.IMAGE, // или FILE
+                        fileName = "received_file",
+                        mimeType = "application/octet-stream",
+                        sizeBytes = update.totalBytes
+                    ))
+
+                    val localUri = outputFile.toUri().toString()
+                    updateTransfer(transferId, FileTransferStatus.COMPLETED, update.totalBytes, false, localUri = localUri)
+                }
+                PayloadTransferUpdate.Status.IN_PROGRESS -> {
+                    val progress = if (update.totalBytes > 0)
+                        update.bytesTransferred.toFloat() / update.totalBytes else 0f
+                    updateTransferProgress(transferId, progress)
+                }
+                PayloadTransferUpdate.Status.FAILURE -> {
+                    Timber.e("Payload transfer FAILED for $transferId")
+                    updateTransfer(transferId, FileTransferStatus.FAILED)
+                }
+            }
+        }
+    }
+
+    private fun updateTransferProgress(transferId: String, progress: Float) {
         _transfers.update { current ->
-            current + (state.transferId to state)
+            current + (transferId to (current[transferId]?.copy(
+                status = FileTransferStatus.TRANSFERRING,
+                progressBytes = progress.toLong()
+            ) ?: FileTransferState(transferId, FileTransferStatus.TRANSFERRING)))
         }
     }
 
-    private suspend fun sendFileOverSocket(
+
+
+    private fun updateTransfer(
         transferId: String,
-        inputStream: InputStream,
-        totalBytes: Long,
-        hostAddress: String,
-        port: Int
-    ) = withContext(Dispatchers.IO) {
-        Timber.i("sendFileOverSocket: подключаемся к $hostAddress:$port")
-
-        Socket().use { socket ->
-            socket.soTimeout = 30_000
-            socket.connect(InetSocketAddress(InetAddress.getByName(hostAddress), port), 15_000)
-            Timber.i("sendFileOverSocket: подключились, начинаем передачу")
-
-            val outputStream: OutputStream = socket.getOutputStream()
-            val buffer = ByteArray(BUFFER_SIZE)
-            var bytesSent = 0L
-            var bytesRead: Int
-
-            inputStream.use { input ->
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    bytesSent += bytesRead
-
-                    updateTransfer(
-                        FileTransferState(
-                            transferId = transferId,
-                            status = FileTransferStatus.TRANSFERRING,
-                            progressBytes = bytesSent,
-                            totalBytes = totalBytes,
-                            isSender = true
-                        )
-                    )
-                }
-                outputStream.flush()
-            }
-
-            Timber.i("sendFileOverSocket: отправлено $bytesSent байт")
+        status: FileTransferStatus,
+        totalBytes: Long = 0,
+        isSender: Boolean = false,
+        localUri: String? = null,
+        error: String? = null
+    ) {
+        _transfers.update { current ->
+            current + (transferId to FileTransferState(
+                transferId = transferId,
+                status = status,
+                totalBytes = totalBytes,
+                isSender = isSender,
+                localUri = localUri,
+                errorMessage = error
+            ))
         }
     }
 
-    private suspend fun receiveFileFromSocket(
-        transferId: String,
-        socket: Socket,
-        outputStream: FileOutputStream,
-        totalBytes: Long
-    ) = withContext(Dispatchers.IO) {
-        socket.use { s ->
-            val inputStream = s.getInputStream()
-            val buffer = ByteArray(BUFFER_SIZE)
-            var bytesReceived = 0L
-            var bytesRead: Int
-
-            outputStream.use { output ->
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                    bytesReceived += bytesRead
-
-                    updateTransfer(
-                        FileTransferState(
-                            transferId = transferId,
-                            status = FileTransferStatus.TRANSFERRING,
-                            progressBytes = bytesReceived,
-                            totalBytes = totalBytes,
-                            isSender = false
-                        )
-                    )
-                }
-            }
-
-            Timber.i("receiveFileFromSocket: получено $bytesReceived байт")
-        }
-    }
-
-    /**
-     * Создаёт файл для сохранения принятого вложения.
-     * Сохраняет в app-specific external storage (не требует разрешений).
-     */
     private fun createOutputFile(attachment: Attachment): File {
         val dir = File(context.getExternalFilesDir(null), "MeshTransfers").also { it.mkdirs() }
         return File(dir, "${attachment.id}_${attachment.fileName}")
     }
 }
+
+
+

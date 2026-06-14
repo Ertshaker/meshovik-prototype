@@ -78,21 +78,6 @@ data class DirectChatScreen(
             Timber.w("CHAT DEBUG: ${directMessages.size} messages")
         }
 
-        LaunchedEffect(participantAddress) {
-            Timber.i("Chat opened with $participantAddress → becoming Group Owner")
-            launch {
-                try {
-                    val success = viewModel.ensureGroupAsOwner(participantAddress)
-                    if (success) {
-                        viewModel.startDiscovering()
-                        Timber.i("Successfully became Group Owner for chat with $participantAddress")
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to become Group Owner")
-                }
-            }
-        }
-
         Scaffold(
             topBar = {
                 TopAppBar(
