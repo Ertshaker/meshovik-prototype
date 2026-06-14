@@ -21,7 +21,6 @@ import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
 import com.meshovik.domain.entity.MessageType
-import com.meshovik.transfer.FileTransferManager
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.Job

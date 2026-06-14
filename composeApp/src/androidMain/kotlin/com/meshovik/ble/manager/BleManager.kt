@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import androidx.annotation.RequiresPermission
 import com.juul.kable.Advertisement
+import com.juul.kable.Peripheral
 import com.meshovik.BleAdvertiser
 import com.meshovik.BleChunker
 import com.meshovik.BleDevice
@@ -53,7 +54,7 @@ class BleManager(
 
     private val bleScanner = BleScanner(context)
     private val bleAdvertiser = BleAdvertiser(context)
-    private val bleChunker = BleChunker(mtu = 20)
+    private val bleChunker = BleChunker()
     private val bleReassembler = BleReassembler()
 
     private val _controlMessages = MutableSharedFlow<MeshControlMessage>(extraBufferCapacity = 8)
@@ -366,6 +367,7 @@ class BleManager(
 
             _connectionStates.update { it + (address to ConnectionState.Connected(address)) }
 
+            startObservingMtu(device, address)
             startObservingDevice(device, address)   // теперь безопасно
             Timber.i("✅ Successfully connected and observing: $address")
 
@@ -375,6 +377,16 @@ class BleManager(
             null
         } finally {
             connectingDevices.remove(address)
+        }
+    }
+
+    private fun startObservingMtu(device: BleDevice, address: String) {
+        scope.launch {
+            device.mtu.collect { mtu ->
+                mtu?.let {
+                    bleChunker.updateMtu(it)
+                }
+            }
         }
     }
 
@@ -551,18 +563,20 @@ class BleManager(
 
             val chunks = bleChunker.chunk(data)
 
-            Timber.d("Sending ${data.size} bytes to $targetAddress in ${chunks.size} chunks")
+            Timber.d("Sending ${data.size} bytes to $targetAddress in ${chunks.size} chunks (chunkSize=${bleChunker.chunkSize})")
 
             chunks.forEachIndexed { index, chunk ->
                 device.write(chunk)
-                Timber.d("Chunk $index/${chunks.size} sent (${chunk.size} bytes)")
-                // delay(10) // иногда помогает стабильности
+                // Небольшая задержка помогает стабильности при больших передачах
+                if (index % 8 == 0 && chunks.size > 10) {
+                    kotlinx.coroutines.delay(5)
+                }
             }
 
-            Timber.i("✅ Message successfully sent to $targetAddress")
+            Timber.i("✅ Data successfully sent to $targetAddress (${data.size} bytes)")
             true
         } catch (e: Exception) {
-            Timber.e(e, "❌ Failed to send data to $targetAddress")   // ← Вот это главное
+            Timber.e(e, "❌ Failed to send data to $targetAddress")
             false
         }
     }
