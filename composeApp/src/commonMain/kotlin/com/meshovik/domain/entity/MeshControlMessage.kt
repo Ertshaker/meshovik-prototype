@@ -13,5 +13,4 @@ data class MeshControlMessage(
 
 enum class ControlMessageType {
     READY_FOR_TRANSFER,
-    // позже можно добавить CANCEL_TRANSFER, ACK и т.д.
 }

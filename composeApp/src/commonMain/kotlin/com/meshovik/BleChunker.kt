@@ -2,11 +2,11 @@ package com.meshovik
 
 class BleChunker {
 
-    private var currentMtu = 23                  // по умолчанию минимальный
-    private var overhead = 25                    // запас на заголовки + безопасность
+    private var currentMtu = 512                  // по умолчанию минимальный
+    private var overhead = 17 + 20                    // запас на заголовки + безопасность
 
     val chunkSize: Int
-        get() = (currentMtu - overhead).coerceAtLeast(20)
+        get() = (currentMtu - overhead).coerceAtLeast(200)
 
     fun updateMtu(newMtu: Int) {
         currentMtu = newMtu

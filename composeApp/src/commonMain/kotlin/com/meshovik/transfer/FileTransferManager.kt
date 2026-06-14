@@ -23,12 +23,6 @@ expect class FileTransferManager {
     val transfers: StateFlow<Map<String, FileTransferState>>
 
     /**
-     * Flow входящих запросов на приём файла.
-     * Эмитирует Attachment с метаданными, полученными по BLE.
-     */
-    val incomingTransferRequests: Flow<Attachment>
-
-    /**
      * Инициировать отправку файла по Wi-Fi Direct.
      *
      * @param attachment  Метаданные файла (id, type, fileName, mimeType, sizeBytes)
@@ -40,19 +34,6 @@ expect class FileTransferManager {
         attachment: Attachment,
         localUri: String,
         targetMeshId: String
-    ): String
-
-    /**
-     * Принять входящий файл.
-     *
-     * @param transferId  ID передачи (из Attachment.id, полученного по BLE)
-     * @param attachment  Метаданные файла
-     * @return Локальный URI сохранённого файла
-     */
-    suspend fun receiveFile(
-        transferId: String,
-        attachment: Attachment,
-        senderAddress: String
     ): String
 
     /**

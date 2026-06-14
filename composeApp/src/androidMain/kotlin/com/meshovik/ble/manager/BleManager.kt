@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,7 +55,7 @@ class BleManager(
 
     private val bleScanner = BleScanner(context)
     private val bleAdvertiser = BleAdvertiser(context)
-    private val bleChunker = BleChunker()
+    public val bleChunker = BleChunker()
     private val bleReassembler = BleReassembler()
 
     private val _controlMessages = MutableSharedFlow<MeshControlMessage>(extraBufferCapacity = 8)
@@ -70,10 +71,16 @@ class BleManager(
     // Reverse mapping: Mesh ID -> BLE MAC address (for sending messages by Mesh ID)
     private val meshIdToBleMap = mutableMapOf<String, String>()
 
+    private val _binaryDataReceived = MutableSharedFlow<Pair<String, ByteArray>>(extraBufferCapacity = 32)
+    val binaryDataReceived: SharedFlow<Pair<String, ByteArray>> = _binaryDataReceived.asSharedFlow()
     // State
     private val _discoveredDevices = MutableStateFlow<List<MeshDevice>>(emptyList())
     val discoveredDevices: StateFlow<List<MeshDevice>> = _discoveredDevices.asStateFlow()
 
+    private val _fileChunksReceived = MutableSharedFlow<Triple<String, String, ByteArray>>(
+        extraBufferCapacity = 64
+    )
+    val fileChunksReceived: SharedFlow<Triple<String, String, ByteArray>> = _fileChunksReceived.asSharedFlow()
     private val _receivedMessages = MutableSharedFlow<MeshMessage>(
         extraBufferCapacity = 32,
         replay = 0
@@ -113,27 +120,60 @@ class BleManager(
 
     private fun observeGattServerData() {
         scope.launch {
-            bleGattServer.receivedData.collect { rawData ->
-                Timber.i("GATT Server received ${rawData.size} bytes")
+            bleGattServer.receivedData.collect { rawChunk ->
+                Timber.i("GATT Server received ${rawChunk.size} bytes")
 
-                val messageBytes = bleReassembler.onChunk("GATT_SERVER", rawData) ?: return@collect
+                val fullMessage = bleReassembler.onChunk("GATT_SERVER", rawChunk) ?: return@collect
 
-                // Пытаемся сначала распарсить как ControlMessage
-                val controlMsg = tryParseControlMessage(messageBytes)
-                if (controlMsg != null) {
-                    Timber.i("Received control message: ${controlMsg.type}")
-                    _controlMessages.emit(controlMsg)
-                    return@collect  // ← Важно! Не идём дальше в обычные сообщения
-                }
-
-                // Если не control — парсим как обычное MeshMessage
-                val parsedMessage = parseReceivedData(messageBytes)
-                if (parsedMessage != null) {
-                    handleReceivedMessage("GATT_SERVER", parsedMessage)
-                    Timber.i("✅ Message added to receivedMessages: ${parsedMessage.content}")
-                }
+                handleIncomingRawData("GATT_SERVER", fullMessage)
             }
         }
+    }
+
+    private fun handleIncomingRawData(source: String, data: ByteArray) {
+        if (data.isEmpty()) return
+
+        val firstByte = data[0].toInt() and 0xFF
+        Timber.d("handleIncomingRawData from $source: ${data.size} bytes | first=0x${firstByte.toString(16)}")
+
+        // IMAGE CHUNK — ослабляем условие
+        if (firstByte == 0xF1 && data.size >= 17) {
+            try {
+                val transferId = extractTransferId(data)
+                val chunkData = data.copyOfRange(17, data.size)
+
+                Timber.i("✅ IMAGE CHUNK | transferId=$transferId | ${chunkData.size} bytes")
+
+                scope.launch {
+                    _fileChunksReceived.emit(Triple(source, transferId, chunkData))
+                }
+                return
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to parse image chunk")
+            }
+        }
+
+        // Control + MeshMessage...
+        val controlMsg = tryParseControlMessage(data)
+        if (controlMsg != null) {
+            scope.launch { _controlMessages.emit(controlMsg) }
+            return
+        }
+
+        if (data.size > 10 && data[0] == '{'.code.toByte()) {
+            val parsed = parseReceivedData(data)
+            if (parsed != null) {
+                handleReceivedMessage(source, parsed)
+                return
+            }
+        }
+
+        Timber.w("Unknown data from $source: ${data.size} bytes, first=0x${firstByte.toString(16)}")
+    }
+    private fun extractTransferId(data: ByteArray): String {
+        if (data.size < 17) return ""
+        val idBytes = data.copyOfRange(1, 17)
+        return idBytes.toString(Charsets.UTF_8).trimEnd('\u0000')
     }
 
     private fun tryParseControlMessage(data: ByteArray): MeshControlMessage? {
@@ -581,6 +621,11 @@ class BleManager(
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    suspend fun sendBinaryData(targetAddress: String, data: ByteArray): Boolean {
+        val targetBle = meshIdToBleMap[targetAddress] ?: targetAddress
+        return sendData(targetBle, data)   // уже существующий приватный метод
+    }
     /**
      * Creates a mesh packet with header (packetId + TTL + hopCount + payload).
      */
@@ -600,7 +645,24 @@ class BleManager(
                 sizeBytes +
                 payload
     }
+    suspend fun sendFilePacket(targetAddress: String, fullPacket: ByteArray): Boolean {
+        return try {
+            val device = connectedDevices[targetAddress] ?: return false
 
+            // Важно: НЕ делаем chunking повторно!
+            device.write(fullPacket)
+
+            // Небольшая задержка для больших пакетов
+            if (fullPacket.size > 300) {
+                delay(8)
+            }
+
+            true
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to send file packet")
+            false
+        }
+    }
     /**
      * Отправляет сообщение с вложением:
      * - По BLE передаются только метаданные (Attachment)

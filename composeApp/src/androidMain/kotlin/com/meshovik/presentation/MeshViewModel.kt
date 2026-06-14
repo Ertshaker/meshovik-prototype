@@ -21,6 +21,7 @@ import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
 import com.meshovik.domain.entity.MessageType
+import com.meshovik.transfer.FileTransferManager
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.Job
@@ -72,23 +73,17 @@ class MeshViewModel(
             observeDevices()
             observeMessages()
             observeFileTransfers()
-            observeIncomingTransfers()
             observeControlMessages()
 
             _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
+
+            startMeshService()
+            startScanning()
 
             Timber.i("Observers launched for this ViewModel instance")
         } else {
             Timber.w("Observers already launched — skipping duplicate subscription")
         }
-
-        bleManager.disconnectFromDevice("skibid")
-        bleManager.stopMeshService()
-        bleManager.stopGattServer()
-        bleManager.stopScanning()
-        bleManager.stopAdvertising()
-
-        fileTransferManager.Advertising()
     }
     private fun observeControlMessages() {
         scope.launch {
@@ -196,13 +191,13 @@ class MeshViewModel(
         try {
             Timber.i("Receiver: starting receive for ${attachment.id}")
 
-            val localUri = fileTransferManager.receiveFile(attachment.id, attachment, senderAddress)
-            _events.emit(MeshEvent.FileReceived(attachment, localUri))
+            fileTransferManager.startReceiving(attachment.id, attachment, senderAddress)
         } catch (e: Exception) {
             Timber.e(e, "handleIncomingAttachment failed")
             _events.emit(MeshEvent.Error("Не удалось получить файл"))
         }
     }
+
     /**
      * Observes file transfer states.
      */
@@ -211,25 +206,36 @@ class MeshViewModel(
             fileTransferManager.transfers.collect { transfers ->
                 _uiState.update { it.copy(fileTransfers = transfers) }
 
-                transfers.values
-                    .filter { it.status == FileTransferStatus.COMPLETED && !it.isSender }
-                    .forEach { state ->
-                        state.localUri?.let { uri ->
-                            meshRepository.updateAttachmentLocalUri(state.transferId, uri)
+                transfers.values.forEach { state ->
+                    when {
+                        state.status == FileTransferStatus.COMPLETED && !state.isSender -> {
+                            state.localUri?.let { uri ->
+                                meshRepository.updateAttachmentLocalUri(state.transferId, uri)
+                                _events.emit(MeshEvent.FileReceived(
+                                    attachment = findAttachmentById(state.transferId)!! /* найди по id или передавай из FileTransferState */,
+                                    localUri = uri
+                                ))
+                            }
+                        }
+                        state.status == FileTransferStatus.FAILED -> {
+                            _events.emit(MeshEvent.Error("Ошибка приёма файла ${state.transferId}"))
                         }
                     }
+                }
             }
         }
     }
-
+    private fun findAttachmentById(transferId: String): Attachment? {
+        return _uiState.value.sentMessages.firstOrNull { it.attachment?.id == transferId }?.attachment
+            ?: _uiState.value.receivedMessages.firstOrNull { it.attachment?.id == transferId }?.attachment
+    }
     /**
      * Observes incoming transfer requests (для показа "Получаем изображение...").
      */
-    private fun observeIncomingTransfers() {
+    private fun observeIncomingTransfers(senderAddress: String, attachment: Attachment) {
         scope.launch {
-            fileTransferManager.incomingTransferRequests.collect { attachment ->
-                _events.emit(MeshEvent.IncomingFileTransfer(attachment))
-            }
+            _events.emit(MeshEvent.IncomingFileTransfer(attachment))
+            Timber.i("Incoming image attachment received via BLE: ${attachment.id}")
         }
     }
     /**
@@ -316,9 +322,9 @@ class MeshViewModel(
      * @param imageUri       URI выбранного изображения
      * @param caption        Подпись (опционально)
      */
-    @RequiresPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+    @RequiresPermission(allOf = [android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT])
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
-        scope.launch{
+        scope.launch {
             try {
                 val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
                 val (width, height) = getImageDimensions(imageUri)
@@ -330,18 +336,17 @@ class MeshViewModel(
                     fileName = fileName,
                     mimeType = mimeType,
                     sizeBytes = sizeBytes,
-                    localUri = imageUri.toString(),
+                    localUri = null,
                     width = width,
                     height = height
                 )
 
-                val message = bleManager.sendMessageWithAttachment(targetAddress, attachment, caption)
-delay(3000)
-                meshRepository.addSentMessage(message)
-                _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
-                _events.emit(MeshEvent.MessageSent(message))
                 Timber.i("Nearby Отправляю изображение $targetAddress")
-
+                val message = bleManager.sendMessageWithAttachment(targetAddress, attachment)
+                meshRepository.addSentMessage(message)
+                _uiState.update {
+                    it.copy(sentMessages = it.sentMessages + message)
+                }
                 // Отправляем файл через Nearby
                 fileTransferManager.sendFile(
                     attachment = attachment,
@@ -365,6 +370,7 @@ delay(3000)
     /**
      * Повторить отправку файла при ошибке.
      */
+    @RequiresPermission(allOf = [android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT])
     fun retryFileTransfer(transferId: String, targetAddress: String) {
         scope.launch {
             val transferState = fileTransferManager.getTransferState(transferId)

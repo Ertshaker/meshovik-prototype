@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -26,6 +27,7 @@ import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import coil3.compose.AsyncImage
+import coil3.toUri
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
@@ -63,7 +65,6 @@ object BroadcastChatScreen : Screen {
         ) { uri: Uri? ->
             uri?.let {
                 Timber.i("Image selected for broadcast: $it")
-                // Для broadcast используем "BROADCAST" как targetAddress
                 viewModel.sendImage("BROADCAST", it)
             }
         }
@@ -266,68 +267,42 @@ private fun ImageAttachmentContent(
     viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
-    val localUri = attachment.localUri
-        ?: transferState?.takeIf { it.status == FileTransferStatus.COMPLETED }?.localUri
+    val localUri = attachment.localUri ?: transferState?.localUri?.takeIf {
+        transferState.status == FileTransferStatus.COMPLETED
+    }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 120.dp, max = 240.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(Color(0xFF2C2C2C)) // тёмно-серый placeholder
     ) {
         when {
-            // Файл доступен локально — показываем через Coil
             localUri != null -> {
                 AsyncImage(
-                    model = Uri.parse(localUri),
-                    contentDescription = attachment.fileName,
+                    model = localUri.toUri(),
+                    contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
                         .clickable { onImageClick(localUri) }
                 )
             }
-        }
 
-        // Статус ошибки с кнопкой повтора
-        if (transferState?.status == FileTransferStatus.FAILED) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.6f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "❌ Ошибка передачи",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.retryFileTransfer(
-                                transferId = attachment.id,
-                                targetAddress = participantAddress
-                            )
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text("Повторить", style = MaterialTheme.typography.labelSmall)
-                    }
+            else -> {
+                // Серый placeholder пока ничего нет
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("🖼", style = MaterialTheme.typography.displayLarge, color = Color.Gray)
+                }
+                if (transferState?.isFinished == false) {
+                    TransferProgressOverlay(transferState)
                 }
             }
         }
     }
 
-    // Имя файла и размер
+    // Имя файла + размер
     Spacer(modifier = Modifier.height(4.dp))
     Text(
         text = "${attachment.fileName} (${formatFileSize(attachment.sizeBytes)})",

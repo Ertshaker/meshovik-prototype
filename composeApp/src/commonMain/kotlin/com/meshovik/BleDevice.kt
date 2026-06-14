@@ -21,7 +21,7 @@ expect class BleDevice(advertisement: Advertisement) {
     fun observe(): Flow<ByteArray>
 
     companion object {
-        const val SERVICE_UUID: String
-        const val CHAR_UUID: String
+        val SERVICE_UUID: String
+        val CHAR_UUID: String
     }
 }

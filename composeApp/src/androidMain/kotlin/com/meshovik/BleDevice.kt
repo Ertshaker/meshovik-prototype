@@ -19,11 +19,11 @@ actual class BleDevice actual constructor(
         onServicesDiscovered {
             try {
                 // Можно попробовать 247 (более стабильный) или 512
-                val negotiatedMtu = requestMtu(247)
-                Timber.Forest.i("✅ MTU negotiated: $negotiatedMtu bytes for ${advertisement.identifier}")
+                val negotiatedMtu = requestMtu(512)
+                Timber.i("✅ MTU negotiated: $negotiatedMtu bytes for ${advertisement.identifier}")
 
             } catch (e: Exception) {
-                Timber.Forest.w(e, "MTU negotiation failed for ${advertisement.identifier}")
+                Timber.w(e, "MTU negotiation failed for ${advertisement.identifier}")
             }
         }
     }

@@ -6,6 +6,7 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -247,15 +249,8 @@ private fun ImageAttachmentContent(
     viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
-    val localUri = attachment.localUri
-        ?: transferState?.localUri?.takeIf { transferState.status == FileTransferStatus.COMPLETED }
-    val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
-            transferState?.status == FileTransferStatus.PENDING
-
-    val isFailed = transferState?.status == FileTransferStatus.FAILED
-
-    LaunchedEffect(localUri, transferState?.status) {
-        Timber.i("Wi-Fi Direct ImageAttachmentContent → localUri=$localUri | status=${transferState?.status} | attachment.localUri=${attachment.localUri}")
+    val localUri = attachment.localUri ?: transferState?.localUri?.takeIf {
+        transferState.status == FileTransferStatus.COMPLETED
     }
 
     Box(
@@ -263,84 +258,33 @@ private fun ImageAttachmentContent(
             .fillMaxWidth()
             .heightIn(min = 120.dp, max = 240.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(Color(0xFF2C2C2C)) // тёмно-серый placeholder
     ) {
         when {
-            // Файл доступен локально — показываем через Coil
             localUri != null -> {
                 AsyncImage(
                     model = localUri.toUri(),
-                    contentDescription = attachment.fileName,
+                    contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clickable { onImageClick(localUri) },
-                    onError = {
-                        Timber.e("AsyncImage failed for $localUri")
-                        // Можно показать placeholder при ошибке загрузки
-                    }
-                )
-            }
-            isTransferring -> {
-                ThumbnailWithProgress(
-                    attachment = attachment,
-                    transferState = transferState
+                        .clickable { onImageClick(localUri) }
                 )
             }
 
-            // 3. Ошибка
-            isFailed -> {
-                ErrorTransferContent(
-                    attachment = attachment,
-                    transferState = transferState,
-                    participantAddress = participantAddress,
-                    viewModel = viewModel
-                )
-            }
-            // 4. Ожидаем начала приёма
             else -> {
-                ImagePlaceholder(attachment.fileName)
-            }
-        }
-
-        // Статус ошибки с кнопкой повтора
-        if (transferState?.status == FileTransferStatus.FAILED) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.6f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "❌ Ошибка передачи",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.retryFileTransfer(
-                                transferId = attachment.id,
-                                targetAddress = participantAddress
-                            )
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text("Повторить", style = MaterialTheme.typography.labelSmall)
-                    }
+                // Серый placeholder пока ничего нет
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("🖼", style = MaterialTheme.typography.displayLarge, color = Color.Gray)
+                }
+                if (transferState?.isFinished == false) {
+                    TransferProgressOverlay(transferState)
                 }
             }
         }
     }
 
-    // Имя файла и размер
+    // Имя файла + размер
     Spacer(modifier = Modifier.height(4.dp))
     Text(
         text = "${attachment.fileName} (${formatFileSize(attachment.sizeBytes)})",
@@ -359,30 +303,6 @@ private fun ThumbnailWithProgress(
     }
 }
 
-/** Ошибка + кнопка повтора */
-@Composable
-private fun ErrorTransferContent(
-    attachment: Attachment,
-    transferState: FileTransferState?,
-    participantAddress: String,
-    viewModel: MeshViewModel
-) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("❌ Ошибка передачи", color = Color.Red)
-            Button(
-                onClick = {
-                    viewModel.retryFileTransfer(attachment.id, participantAddress)
-                }
-            ) {
-                Text("Повторить")
-            }
-        }
-    }
-}
 @Composable
 private fun TransferProgressOverlay(transferState: FileTransferState) {
     Box(
