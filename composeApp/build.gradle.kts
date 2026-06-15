@@ -6,6 +6,20 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
+    id("app.cash.sqldelight") version "2.3.2"
+}
+repositories {
+    google()
+    mavenCentral()
+}
+
+sqldelight {
+    databases {
+        create("MeshovikDatabase") {
+            packageName.set("com.meshovik.database")
+            // dialect = "app.cash.sqldelight:dialects.sqlite" // если нужно явно
+        }
+    }
 }
 
 kotlin {
@@ -52,9 +66,12 @@ kotlin {
 
             // Kotlinx DateTime
             implementation(libs.kotlinx.datetime)
+            implementation("app.cash.sqldelight:runtime:2.0.2")
+            implementation("app.cash.sqldelight:coroutines-extensions:2.0.2")
         }
 
         androidMain.dependencies {
+            implementation("app.cash.sqldelight:android-driver:2.3.2")
             implementation(compose.uiTooling)
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.core.ktx)
@@ -79,11 +96,6 @@ kotlin {
 
             // Coil — загрузка изображений (URI, file://, content://)
             implementation(libs.coil.compose)
-        }
-
-        commonTest.dependencies {
-            implementation(libs.kotlin.test)
-            implementation(libs.kotlin.testJunit)
         }
 
         iosMain.dependencies {

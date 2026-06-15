@@ -10,10 +10,12 @@ import android.util.Base64
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import androidx.lifecycle.ViewModel
+import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.meshovik.ble.manager.BleManager
 import com.meshovik.data.repository.MeshRepository
+import com.meshovik.database.MeshovikDatabase
 import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
 import com.meshovik.domain.entity.ControlMessageType
@@ -79,9 +81,28 @@ class MeshViewModel(
             observeControlMessages()
 
             _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
-
             startMeshService()
+            val driver = AndroidSqliteDriver(
+                MeshovikDatabase.Schema,
+                context,
+                "meshovik.db"
+            )
 
+            val database = MeshovikDatabase(driver)
+
+// ТЕСТ
+            database.meshovikQueries.insertOrReplaceUserProfile(
+                mesh_id = "test_id",
+                display_name = "Test User",
+                last_seen = System.currentTimeMillis(),
+                last_name_update = System.currentTimeMillis()
+            )
+
+            val user = database.meshovikQueries
+                .getUserProfile("test_id")
+                .executeAsOneOrNull()
+
+            println("USER FROM DB = $user")
             Timber.i("Observers launched for this ViewModel instance")
         } else {
             Timber.w("Observers already launched — skipping duplicate subscription")

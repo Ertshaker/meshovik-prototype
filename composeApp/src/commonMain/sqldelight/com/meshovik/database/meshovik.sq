@@ -1,0 +1,133 @@
+-- =============================================
+-- meshovik.sq
+-- =============================================
+
+-- 1. Пользователи
+CREATE TABLE user_profiles (
+    mesh_id TEXT PRIMARY KEY NOT NULL,
+    display_name TEXT NOT NULL,
+    last_seen INTEGER NOT NULL,
+    last_name_update INTEGER NOT NULL
+);
+
+-- Queries для user_profiles
+getUserProfile:
+SELECT * FROM user_profiles WHERE mesh_id = ?;
+
+insertOrReplaceUserProfile:
+INSERT OR REPLACE INTO user_profiles (mesh_id, display_name, last_seen, last_name_update)
+VALUES (?, ?, ?, ?);
+
+updateDisplayName:
+UPDATE user_profiles SET display_name = ?, last_name_update = ? WHERE mesh_id = ?;
+
+deleteAllUsers:
+DELETE FROM user_profiles;
+
+
+-- 2. Conversations (только direct)
+CREATE TABLE conversations (
+    conversation_id TEXT PRIMARY KEY NOT NULL,
+    last_message_id TEXT,
+    updated_at INTEGER NOT NULL
+);
+
+getConversation:
+SELECT * FROM conversations WHERE conversation_id = ?;
+
+insertOrReplaceConversation:
+INSERT OR REPLACE INTO conversations (conversation_id, last_message_id, updated_at)
+VALUES (?, ?, ?);
+
+getAllConversations:
+SELECT * FROM conversations ORDER BY updated_at DESC;
+
+deleteAllConversations:
+DELETE FROM conversations;
+
+
+-- 3. Типы сообщений
+CREATE TABLE message_types (
+    type_name TEXT PRIMARY KEY NOT NULL
+);
+
+INSERT OR IGNORE INTO message_types (type_name) VALUES ('text');
+INSERT OR IGNORE INTO message_types (type_name) VALUES ('image');
+
+
+-- 4. Messages
+CREATE TABLE messages (
+    message_id TEXT PRIMARY KEY NOT NULL,
+    conversation_id TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    receiver_id TEXT NOT NULL,
+    type TEXT NOT NULL REFERENCES message_types(type_name),
+    content TEXT,
+    attachment_id TEXT,
+    timestamp INTEGER NOT NULL
+);
+
+-- Основные запросы
+insertMessage:
+INSERT INTO messages (message_id, conversation_id, sender_id, receiver_id, type, content, attachment_id, timestamp)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+getMessagesForConversation:
+SELECT * FROM messages
+WHERE conversation_id = ?
+ORDER BY timestamp ASC;
+
+getAllMessages:
+SELECT * FROM messages ORDER BY timestamp DESC;
+
+deleteAllMessages:
+DELETE FROM messages;
+
+
+-- 5. Attachments
+CREATE TABLE attachments (
+    attachment_id TEXT PRIMARY KEY NOT NULL,
+    message_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime_type TEXT,
+    size_bytes INTEGER NOT NULL,
+    local_uri TEXT,
+    thumbnail_base64 TEXT
+);
+
+insertAttachment:
+INSERT INTO attachments (attachment_id, message_id, type, file_name, mime_type, size_bytes, local_uri, thumbnail_base64)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+getAttachment:
+SELECT * FROM attachments WHERE attachment_id = ?;
+
+updateAttachmentLocalUri:
+UPDATE attachments SET local_uri = ? WHERE attachment_id = ?;
+
+deleteAllAttachments:
+DELETE FROM attachments;
+
+getAllKnownPeers:
+SELECT * FROM user_profiles
+ORDER BY display_name ASC;
+
+getKnownPeer:
+SELECT * FROM user_profiles WHERE mesh_id = ?;
+
+insertOrReplaceKnownPeer:
+INSERT OR REPLACE INTO user_profiles (mesh_id, display_name, last_seen, last_name_update)
+VALUES (?, ?, ?, ?);
+
+deleteKnownPeer:
+DELETE FROM user_profiles WHERE mesh_id = ?;
+
+-- =============================================
+-- Дополнительные полезные запросы
+-- =============================================
+getLastMessageForConversation:
+SELECT * FROM messages
+WHERE conversation_id = ?
+ORDER BY timestamp DESC
+LIMIT 1;
