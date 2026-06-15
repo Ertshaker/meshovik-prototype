@@ -48,21 +48,24 @@ class MeshViewModel(
     applicationContext: Context
 ) : ScreenModel {
     private val scope = screenModelScope
-
     private val context = applicationContext.applicationContext
-    // Local device address for message filtering
+
     private val localDeviceAddress: String = bleManager.getLocalAddress()
     private val bleToP2pMac = mutableMapOf<String, String>()
-    // UI State
+
     private val _uiState = MutableStateFlow(MeshUiState())
     val uiState: StateFlow<MeshUiState> = _uiState.asStateFlow()
     private val processingAttachments = mutableSetOf<String>()
-    // Events
+
     private val _events = MutableSharedFlow<MeshEvent>()
     val events: SharedFlow<MeshEvent> = _events.asSharedFlow()
     private var observersLaunched = false
-    // Deduplicate received messages (must be declared BEFORE init)
+
     private val processedMessageIds = mutableSetOf<String>()
+
+    val isMeshServiceActive: StateFlow<Boolean>
+        get() = bleManager.isMeshService
+    val localUserName = MutableStateFlow(bleManager.getLocalName())
 
     init {
         Timber.e("=== MeshViewModel CREATED === instance=${System.identityHashCode(this)} | thread=${Thread.currentThread().name}")
@@ -78,7 +81,6 @@ class MeshViewModel(
             _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
 
             startMeshService()
-            startScanning()
 
             Timber.i("Observers launched for this ViewModel instance")
         } else {
@@ -92,12 +94,22 @@ class MeshViewModel(
                     Timber.i("Received READY_FOR_TRANSFER for ${controlMsg.attachmentId}")
                     _events.emit(
                         MeshEvent.ReadyForTransfer(
-                            attachmentId = controlMsg.attachmentId,
+                            attachmentId = controlMsg.attachmentId!!,
                             senderAddress = controlMsg.senderId
                         )
                     )
                 }
             }
+        }
+    }
+
+    fun updateUserName(newName: String) {
+        scope.launch {
+            bleManager.setNewUserName(newName)
+            localUserName.value = newName
+
+            stopMeshService()
+            startMeshService()
         }
     }
     /**
@@ -246,6 +258,7 @@ class MeshViewModel(
         scope.launch {
             bleManager.startMeshService().collect { success ->
                 if (success) {
+                    bleManager.startScanning()
                     Timber.i("Mesh service started successfully")
                     _events.emit(MeshEvent.ServiceStarted)
                 } else {

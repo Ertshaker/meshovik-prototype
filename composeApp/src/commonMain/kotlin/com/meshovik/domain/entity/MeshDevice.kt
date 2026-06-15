@@ -25,5 +25,6 @@ data class MeshDevice(
      * Stable Mesh ID (e.g. "MeshA1B2C3D4") — known after receiving first message from this device.
      * Empty string if not yet known.
      */
-    val meshId: String = ""
+    val meshId: String = "",
+    val userName: String = ""
 )

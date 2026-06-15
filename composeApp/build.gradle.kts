@@ -74,6 +74,8 @@ kotlin {
             implementation("cafe.adriel.voyager:voyager-koin:2.2.21-1.10.3")
             implementation(libs.voyager.screen.model)
             implementation(libs.voyager.transitions)
+            implementation(libs.compose.material3)
+            implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
 
             // Coil — загрузка изображений (URI, file://, content://)
             implementation(libs.coil.compose)

@@ -1,65 +1,81 @@
 package com.meshovik.presentation.screens
 
 import android.net.Uri
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import cafe.adriel.voyager.core.screen.Screen
+import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
-import coil3.compose.AsyncImage
-import coil3.toUri
 import com.meshovik.core.util.MeshUtils
-import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MessageType
 import com.meshovik.presentation.MeshViewModel
 import com.meshovik.transfer.FileTransferState
-import com.meshovik.transfer.FileTransferStatus
-import org.koin.androidx.compose.koinViewModel
-import org.koin.compose.getKoin
 import timber.log.Timber
 
-object BroadcastChatScreen : Screen {
+public object ChatColors {
+    val BgDark = Color(0xFF050505)
+    val BgSurface = Color(0xFF090909)
+    val Primary = Color(0xFF00E5FF)
+    val PrimaryDim = Color(0xFF00B8CC)
+    val Secondary = Color(0xFF00FFA3)
+    val TextPrimary = Color(0xFFEAEAEA)
+    val TextSecondary = Color(0xFFA8A8A8)
+    val DividerColor = Color(0xFF1A1A1A)
+    val CardBg = Color(0xFF111111)
+    val MessageBgMe = Color(0xFF0D3D3F)
+    val MessageBorderMe = Color(0xFF156265)
+    val MessageBgOther = Color(0xFF1A1A1A)
+    val MessageBorderOther = Color(0xFF282828)
+}
 
+public val SpaceMonoFont = FontFamily.Monospace
+
+object BroadcastChatScreen : Screen {
     override val key: String = "BroadcastChat"
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
-        val viewModel: MeshViewModel = getKoin().get()
+        val viewModel: MeshViewModel = koinScreenModel()
         val navigator = LocalNavigator.currentOrThrow
         val uiState by viewModel.uiState.collectAsState()
         var messageText by remember { mutableStateOf("") }
 
-        // Get broadcast messages from repository
         val messagesFlow = remember {
             viewModel.getMessagesFlowForChat("broadcast")
         }
 
         val broadcastMessages by messagesFlow.collectAsState(initial = emptyList())
 
-        // Лаунчер для выбора изображения из галереи
         val imagePickerLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.PickVisualMedia()
         ) { uri: Uri? ->
@@ -70,14 +86,32 @@ object BroadcastChatScreen : Screen {
         }
 
         Scaffold(
+            containerColor = ChatColors.BgDark,
             topBar = {
                 TopAppBar(
-                    title = { Text("Broadcast Chat") },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Всеобщий чат",
+                                color = ChatColors.TextPrimary,
+                                fontFamily = SpaceMonoFont,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        }
+                    },
                     navigationIcon = {
                         IconButton(onClick = { navigator.pop() }) {
-                            Text("←")
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Back",
+                                tint = ChatColors.Primary
+                            )
                         }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = ChatColors.BgSurface
+                    )
                 )
             }
         ) { padding ->
@@ -85,7 +119,15 @@ object BroadcastChatScreen : Screen {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .background(ChatColors.BgDark)
             ) {
+                // Divider после TopAppBar
+                HorizontalDivider(
+                    color = ChatColors.DividerColor,
+                    thickness = 1.dp
+                )
+
+                // Messages List
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     reverseLayout = true,
@@ -93,22 +135,22 @@ object BroadcastChatScreen : Screen {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(broadcastMessages.reversed()) { message ->
-                        val transferState = message.attachment?.let {
-                            uiState.fileTransfers[it.id]
-                        }
+                        val transferState = message.attachment?.let { uiState.fileTransfers[it.id] }
                         BroadcastMessageItem(
                             message = message,
                             localDeviceAddress = uiState.localDeviceAddress,
                             transferState = transferState,
                             viewModel = viewModel,
                             onSenderClick = { senderId ->
-                                // senderId is a Mesh ID (e.g. "MeshA1B2C3D4")
-                                // Find device by meshId first, fallback to address
                                 val device = uiState.devices.find { it.meshId == senderId }
                                     ?: uiState.devices.find { it.address == senderId }
                                 if (device != null) {
-                                    // Navigate using meshId as chat ID so messages are routed correctly
-                                    navigator.push(DirectChatScreen(device.meshId.ifEmpty { device.address }, device.name))
+                                    navigator.push(
+                                        DirectChatScreen(
+                                            device.meshId.ifEmpty { device.address },
+                                            device.name
+                                        )
+                                    )
                                 }
                             },
                             onImageClick = { imageUri ->
@@ -123,10 +165,17 @@ object BroadcastChatScreen : Screen {
                     }
                 }
 
-                BroadcastMessageInputRow(
-                    text = messageText,
-                    onTextChange = { messageText = it },
-                    onSend = {
+                // Divider перед Input Panel
+                HorizontalDivider(
+                    color = ChatColors.DividerColor,
+                    thickness = 1.dp
+                )
+
+                // Input Panel
+                BroadcastMessageInputPanel(
+                    messageText = messageText,
+                    onMessageTextChange = { messageText = it },
+                    onSendMessage = {
                         if (messageText.isNotBlank()) {
                             viewModel.broadcastMessage(messageText)
                             messageText = ""
@@ -156,59 +205,75 @@ private fun BroadcastMessageItem(
     ) {
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = if (isFromMe) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceVariant
+                containerColor = if (isFromMe) ChatColors.MessageBgMe else ChatColors.MessageBgOther
             ),
-            modifier = Modifier.widthIn(max = 280.dp)
+            modifier = Modifier.widthIn(max = 280.dp),
+            shape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (isFromMe) 0.dp else 16.dp,   // прямой угол у своих
+                bottomEnd = if (isFromMe) 16.dp else 0.dp,
+            ),
+            border = if (isFromMe) BorderStroke(1.dp, color = ChatColors.MessageBorderMe)
+            else BorderStroke(1.dp, color = ChatColors.MessageBorderOther)
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp)
-            ) {
+            Column(modifier = Modifier.padding(12.dp).width(IntrinsicSize.Max)) {
                 if (!isFromMe) {
                     Text(
                         text = message.senderId,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontFamily = SpaceMonoFont,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = ChatColors.Primary,
                         modifier = Modifier.clickable { onSenderClick(message.senderId) }
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
 
                 when {
-                    // Сообщение с вложением-изображением
                     message.type == MessageType.ATTACHMENT &&
-                    message.attachment?.type == AttachmentType.IMAGE -> {
+                            message.attachment?.type == AttachmentType.IMAGE -> {
                         ImageAttachmentContent(
                             attachment = message.attachment,
                             transferState = transferState,
-                            participantAddress = "BROADCAST", // Для broadcast не используется, но требуется сигнатурой
+                            participantAddress = "BROADCAST",
                             viewModel = viewModel,
                             onImageClick = onImageClick
                         )
-                        // Подпись (если есть)
                         if (message.content.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = message.content,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = androidx.compose.ui.text.TextStyle(
+                                    fontFamily = SpaceMonoFont,
+                                    fontSize = 13.sp,
+                                    color = ChatColors.TextPrimary
+                                )
                             )
                         }
                     }
-
-                    // Обычное текстовое сообщение
                     else -> {
                         Text(
                             text = message.content,
-                            style = MaterialTheme.typography.bodyMedium
+                            style = androidx.compose.ui.text.TextStyle(
+                                fontFamily = SpaceMonoFont,
+                                fontSize = 13.sp,
+                                color = ChatColors.TextPrimary
+                            )
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = MeshUtils.formatTimestamp(message.timestamp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = MeshUtils.formatTimestamp(message.timestamp).substringBeforeLast(":"), // без секунд
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontFamily = SpaceMonoFont,
+                        fontSize = 11.sp,
+                        color = ChatColors.TextSecondary
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.End
                 )
@@ -218,160 +283,124 @@ private fun BroadcastMessageItem(
 }
 
 @Composable
-private fun BroadcastMessageInputRow(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
+private fun BroadcastMessageInputPanel(
+    messageText: String,
+    onMessageTextChange: (String) -> Unit,
+    onSendMessage: () -> Unit,
     onAttachImage: () -> Unit
 ) {
-    Row(
+    var attachmentMenuExpanded by remember { mutableStateOf(false) }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .background(ChatColors.BgSurface)
+            .padding(12.dp)
     ) {
-        // Кнопка прикрепить изображение
-        IconButton(
-            onClick = onAttachImage
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "🖼",
-                style = MaterialTheme.typography.titleLarge
-            )
-        }
-
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Broadcast message...") },
-            maxLines = 3
-        )
-        Button(
-            onClick = onSend,
-            enabled = text.isNotBlank()
-        ) {
-            Text("Send")
-        }
-    }
-}
-
-// ─── Переиспользуемые компоненты из DirectChatScreen ───────────────────────
-
-@Composable
-private fun ImageAttachmentContent(
-    attachment: Attachment,
-    transferState: FileTransferState?,
-    participantAddress: String,
-    viewModel: MeshViewModel,
-    onImageClick: (String) -> Unit
-) {
-    val localUri = attachment.localUri ?: transferState?.localUri
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 120.dp, max = 240.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF2C2C2C)) // тёмно-серый placeholder
-    ) {
-        when {
-            localUri != null -> {
-                AsyncImage(
-                    model = localUri.toUri(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { onImageClick(localUri) }
-                )
-            }
-
-            else -> {
-                // Серый placeholder пока ничего нет
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("🖼", style = MaterialTheme.typography.displayLarge, color = Color.Gray)
+            // Attachment button
+            Box {
+                IconButton(
+                    onClick = { attachmentMenuExpanded = !attachmentMenuExpanded },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.AttachFile,
+                        contentDescription = "Attach",
+                        tint = ChatColors.Primary,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
-                if (transferState?.isFinished == false) {
-                    TransferProgressOverlay(transferState)
+
+                DropdownMenu(
+                    expanded = attachmentMenuExpanded,
+                    onDismissRequest = { attachmentMenuExpanded = false },
+                    containerColor = ChatColors.CardBg,
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 0.dp,
+                    border = BorderStroke(1.dp, ChatColors.DividerColor),
+                    offset = DpOffset(x = 0.dp, y = (-120).dp)
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Image,
+                                    contentDescription = null,
+                                    tint = ChatColors.Primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    "Фото или видео",
+                                    color = ChatColors.TextPrimary,
+                                    fontFamily = SpaceMonoFont,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        },
+                        onClick = {
+                            attachmentMenuExpanded = false
+                            onAttachImage()
+                        }
+                    )
                 }
             }
-        }
-    }
 
-    // Имя файла + размер
-    Spacer(modifier = Modifier.height(4.dp))
-    Text(
-        text = "${attachment.fileName} (${formatFileSize(attachment.sizeBytes)})",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
+            OutlinedTextField(
+                value = messageText,
+                onValueChange = onMessageTextChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 40.dp, max = 100.dp),
+                placeholder = {
+                    Text(
+                        "Сообщение...",
+                        color = ChatColors.TextSecondary,
+                        fontFamily = SpaceMonoFont,
+                        fontSize = 13.sp
+                    )
+                },
+                maxLines = 3,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = ChatColors.Primary,
+                    unfocusedBorderColor = ChatColors.DividerColor,
+                    focusedTextColor = ChatColors.TextPrimary,
+                    unfocusedTextColor = ChatColors.TextPrimary,
+                    cursorColor = ChatColors.Primary,
+                ),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontFamily = SpaceMonoFont,
+                    fontSize = 13.sp
+                )
+            )
 
-@Composable
-private fun TransferProgressOverlay(transferState: FileTransferState) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.4f)),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(16.dp)
-        ) {
-            if (transferState.progress > 0f) {
-                LinearProgressIndicator(
-                    progress = { transferState.progress },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.White
-                )
-                Text(
-                    text = "${(transferState.progress * 100).toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium
-                )
-            } else {
-                CircularProgressIndicator(color = Color.White)
-                Text(
-                    text = if (transferState.isSender) "Отправка..." else "Получение...",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium
+            IconButton(
+                onClick = if (messageText.isNotBlank()) onSendMessage else onSendMessage,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        color = if (messageText.isNotBlank()) ChatColors.Primary else ChatColors.PrimaryDim,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    .clip(RoundedCornerShape(10.dp))
+            ) {
+                Icon(
+                    imageVector = if (messageText.isNotBlank()) Icons.Filled.Send else Icons.Filled.Mic,
+                    contentDescription = if (messageText.isNotBlank()) "Send" else "Record",
+                    tint = ChatColors.BgDark,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun ImagePlaceholder(fileName: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = "🖼",
-                style = MaterialTheme.typography.displaySmall
-            )
-            Text(
-                text = fileName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-private fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "$bytes B"
-        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
     }
 }

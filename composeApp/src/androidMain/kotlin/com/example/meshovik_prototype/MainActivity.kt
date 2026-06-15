@@ -11,7 +11,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import com.meshovik.presentation.screens.MeshMessengerScreen
 import timber.log.Timber
@@ -51,7 +55,27 @@ class MainActivity : ComponentActivity() {
             MeshMessengerScreen.Content()
         }
     }
+    @Composable
+    fun MeshovikTheme(
+        content: @Composable () -> Unit
+    ) {
+        val colors = darkColorScheme(
+            background = Color(0xFF050505),
+            surface = Color(0xFF0A0A0A),
 
+            primary = Color(0xFF00E5FF),   // BLE голубой
+            secondary = Color(0xFF00FFA3),
+
+            onBackground = Color(0xFFEAEAEA),
+            onSurface = Color(0xFFEAEAEA)
+        )
+
+        MaterialTheme(
+            colorScheme = colors,
+            typography = Typography(),
+            content = content
+        )
+    }
     private fun requestBlePermissions() {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(

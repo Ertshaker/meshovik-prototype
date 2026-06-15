@@ -27,7 +27,7 @@ actual class BleDevice actual constructor(
             }
         }
     }
-
+    val userName: String = ""
     actual val mtu: StateFlow<Int?>
         get() = (peripheral as AndroidPeripheral).mtu
 

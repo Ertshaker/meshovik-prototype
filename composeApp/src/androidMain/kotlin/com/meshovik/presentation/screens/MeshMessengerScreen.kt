@@ -60,6 +60,7 @@ object MeshMessengerScreen : Screen {
         }
 
         Scaffold(
+            containerColor = Color(0xFF000000),
             topBar = {
                 TopAppBar(
                     title = { Text("Meshovik") },
@@ -90,7 +91,10 @@ object MeshMessengerScreen : Screen {
                 )
 
                 // Device list
-                Text("Discovered Devices (${uiState.devices.size})", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Discovered Devices (${uiState.devices.size})",
+                    color = Color(0xFFFFFFFF)
+                )
                 DeviceList(
                     devices = uiState.devices,
                     selectedDevice = selectedDevice,
@@ -102,7 +106,10 @@ object MeshMessengerScreen : Screen {
                 )
 
                 // Messages
-                Text("Messages", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Messages",
+                    color = Color(0xFFFFFFFF)
+                )
                 MessageList(
                     messages = uiState.receivedMessages + uiState.sentMessages,
                     modifier = Modifier.weight(1f)
@@ -138,7 +145,10 @@ private fun StatusCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isAdvertising) Color(0xFF4CAF50).copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant
+            containerColor = if (isAdvertising)
+                Color(0xFF4CAF50).copy(alpha = 0.1f)
+            else
+                Color(0xFF111111)
         )
     ) {
         Column(
@@ -154,22 +164,22 @@ private fun StatusCard(
             ) {
                 Text(
                     text = if (isAdvertising) "● Advertising" else "○ Not advertising",
-                    color = if (isAdvertising) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isAdvertising) Color(0xFF4CAF50) else Color(0xFF9CA3AF)
                 )
                 Text(
                     text = if (isScanning) "● Scanning" else "○ Idle",
-                    color = if (isScanning) Color(0xFF2196F3) else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isScanning) Color(0xFF22D3EE) else Color(0xFF9CA3AF)
                 )
             }
             Text(
                 text = "$deviceCount devices discovered",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = Color(0xFF9CA3AF)
             )
             Text(
                 text = "Tip: Ensure both devices have granted BLE permissions and Bluetooth is enabled",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = Color(0xFF9CA3AF)
             )
         }
     }
@@ -214,8 +224,10 @@ private fun DeviceItem(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected)
+                Color(0xFF0F172A) // лёгкий синий tint
+            else
+                Color(0xFF0A0A0A)
         )
     ) {
         Row(
@@ -226,10 +238,10 @@ private fun DeviceItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(device.name, style = MaterialTheme.typography.bodyLarge)
+                Text(device.name, color = Color(0xFFFFFFFF))
                 Text(
                     "${device.address.take(8)}... • RSSI: ${device.rssi}",
-                    style = MaterialTheme.typography.bodySmall
+                    color = Color(0xFF9CA3AF)
                 )
             }
 

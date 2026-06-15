@@ -4,10 +4,10 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Chat(
-    val id: String,                    // Главный стабильный ID чата (MeshID или BLE address)
+    val id: String,
     val type: ChatType,
-    val participantAddress: String,    // BLE address для соединения
-    val participantMeshId: String? = null,   // ← Новый стабильный MeshID
+    val participantAddress: String,
+    val participantMeshId: String? = null,
     val participantName: String,
     val lastMessage: String? = null,
     val lastMessageTime: Long? = null,
@@ -20,7 +20,7 @@ data class Chat(
             id = "broadcast",
             type = ChatType.BROADCAST,
             participantAddress = "broadcast",
-            participantName = "Broadcast"
+            participantName = "Всеобщий чат"
         )
 
         fun fromDevice(device: MeshDevice): Chat {
@@ -31,7 +31,7 @@ data class Chat(
                 type = ChatType.DIRECT,
                 participantAddress = device.address,           // BLE address для подключения
                 participantMeshId = device.meshId.ifEmpty { null },
-                participantName = device.name,
+                participantName = device.userName,
                 rssi = device.rssi
             )
         }

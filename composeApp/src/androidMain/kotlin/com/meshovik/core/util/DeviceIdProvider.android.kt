@@ -2,6 +2,7 @@ package com.meshovik.core.util
 
 import android.content.Context
 import java.util.UUID
+import androidx.core.content.edit
 
 /**
  * Android implementation of DeviceIdProvider using SharedPreferences.
@@ -20,7 +21,7 @@ actual class DeviceIdProvider(
     actual fun getDeviceId(): String {
         return prefs.getString(KEY_DEVICE_ID, null) ?: run {
             val newId = generateDeviceId()
-            prefs.edit().putString(KEY_DEVICE_ID, newId).apply()
+            prefs.edit { putString(KEY_DEVICE_ID, newId) }
             newId
         }
     }
@@ -36,7 +37,7 @@ actual class DeviceIdProvider(
      * Sets the user's display name.
      */
     actual fun setUserName(name: String) {
-        prefs.edit().putString(KEY_USER_NAME, name).apply()
+        prefs.edit { putString(KEY_USER_NAME, name) }
     }
 
     private fun generateDeviceId(): String {
