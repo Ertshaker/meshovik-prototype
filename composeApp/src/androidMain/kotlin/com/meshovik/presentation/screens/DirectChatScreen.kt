@@ -12,10 +12,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
@@ -45,12 +47,13 @@ import com.meshovik.presentation.MeshViewModel
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import timber.log.Timber
-
+import com.meshovik.domain.entity.MeshDevice
 // Цветовая палитра
 
 data class DirectChatScreen(
     private val participantAddress: String,
-    private val participantName: String
+    private val participantName: String,
+    private val meshId: String
 ) : Screen {
     override val key: String = "DirectChat_$participantAddress"
 
@@ -66,6 +69,9 @@ data class DirectChatScreen(
         val messagesFlow = remember(participantAddress) {
             viewModel.getMessagesFlowForChat(participantAddress)
         }
+
+        val isAlreadyContact by viewModel.isContactFlow(meshId)
+            .collectAsState(initial = false)
 
         val directMessages by messagesFlow.collectAsState()
 
@@ -118,7 +124,40 @@ data class DirectChatScreen(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = ChatColors.BgSurface
-                    )
+                    ),
+                    actions = {
+                        Box{
+                            if (!isAlreadyContact) {
+                                IconButton(onClick = {
+                                    val device = MeshDevice(
+                                        id = participantAddress,
+                                        name = participantName,
+                                        address = participantAddress,
+                                        meshId = meshId,
+                                        userName = participantName,
+                                        wifiDirectAddress = ""
+                                    )
+                                    viewModel.addToContacts(device)
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PersonAdd,
+                                        contentDescription = "Добавить в контакты",
+                                        tint = ChatColors.Primary
+                                    )
+                                }
+                            } else {
+                                IconButton(onClick = {
+                                    viewModel.removeFromContacts(meshId)
+                                }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.PersonRemove,
+                                        contentDescription = "Удалить из контактов",
+                                        tint = ChatColors.Primary
+                                    )
+                                }
+                            }
+                        }
+                    }
                 )
             }
         ) { padding ->
@@ -144,7 +183,6 @@ data class DirectChatScreen(
                             localDeviceAddress = uiState.localDeviceAddress,
                             transferState = transferState,
                             participantAddress = participantAddress,
-                            viewModel = viewModel,
                             onImageClick = { imageUri ->
                                 navigator.push(
                                     FullScreenImageScreen(
@@ -327,7 +365,7 @@ private fun MessageInputPanel(
                 .clip(RoundedCornerShape(10.dp))
         ) {
             Icon(
-                imageVector = if (messageText.isNotBlank()) Icons.Filled.Send else Icons.Filled.Mic,
+                imageVector = if (messageText.isNotBlank()) Icons.AutoMirrored.Filled.Send else Icons.Filled.Mic,
                 contentDescription = if (messageText.isNotBlank()) "Send" else "Record",
                 tint = ChatColors.BgDark,
                 modifier = Modifier.size(20.dp)
@@ -342,7 +380,6 @@ private fun DirectMessageItem(
     localDeviceAddress: String,
     transferState: FileTransferState?,
     participantAddress: String,
-    viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
     val isFromMe = message.senderId == localDeviceAddress
@@ -374,7 +411,6 @@ private fun DirectMessageItem(
                             attachment = message.attachment,
                             transferState = transferState,
                             participantAddress = participantAddress,
-                            viewModel = viewModel,
                             onImageClick = onImageClick
                         )
                         if (message.content.isNotBlank()) {
@@ -424,13 +460,14 @@ fun ImageAttachmentContent(
     attachment: Attachment,
     transferState: FileTransferState?,
     participantAddress: String,
-    viewModel: MeshViewModel,
     onImageClick: (String) -> Unit
 ) {
-    val localUri = attachment.localUri ?: transferState?.localUri
-
+    val localUri = attachment.localUri
+        ?: transferState?.localUri?.takeIf { transferState.status == FileTransferStatus.COMPLETED }
     val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
             transferState?.status == FileTransferStatus.PENDING
+
+    val isFailed = transferState?.status == FileTransferStatus.FAILED
 
     Box(
         modifier = Modifier

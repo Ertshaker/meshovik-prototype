@@ -20,7 +20,7 @@ data class Chat(
             id = "broadcast",
             type = ChatType.BROADCAST,
             participantAddress = "broadcast",
-            participantName = "Всеобщий чат"
+            participantName = "Всеобщий чат",
         )
 
         fun fromDevice(device: MeshDevice): Chat {
@@ -32,7 +32,7 @@ data class Chat(
                 participantAddress = device.address,           // BLE address для подключения
                 participantMeshId = device.meshId.ifEmpty { null },
                 participantName = device.userName,
-                rssi = device.rssi
+                rssi = device.rssi,
             )
         }
     }

@@ -148,7 +148,8 @@ object BroadcastChatScreen : Screen {
                                     navigator.push(
                                         DirectChatScreen(
                                             device.meshId.ifEmpty { device.address },
-                                            device.name
+                                            device.name,
+                                            device.meshId
                                         )
                                     )
                                 }
@@ -239,7 +240,6 @@ private fun BroadcastMessageItem(
                             attachment = message.attachment,
                             transferState = transferState,
                             participantAddress = "BROADCAST",
-                            viewModel = viewModel,
                             onImageClick = onImageClick
                         )
                         if (message.content.isNotBlank()) {

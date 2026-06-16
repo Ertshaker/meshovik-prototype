@@ -1,135 +1,152 @@
 package com.meshovik.presentation.components
 
+import android.R
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothAudio
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.meshovik.core.util.MeshUtils
 import com.meshovik.domain.entity.Chat
 import com.meshovik.domain.entity.ChatType
+import com.meshovik.domain.entity.MeshDevice
+import com.meshovik.presentation.screens.ChatColors
+import com.meshovik.presentation.screens.SpaceMonoFont
 
 /**
- * Drawer content with chat list and scanning button.
+ * Drawer content with contacts list.
+ * Shows your identity, search, and list of chats/contacts.
  */
+
 @Composable
 fun ChatDrawerContent(
     chats: List<Chat>,
-    isScanning: Boolean,
+    knownDevices: List<MeshDevice>,
     onChatClick: (Chat) -> Unit,
-    onScanningToggle: () -> Unit,
+    onDirectChatClick: (MeshDevice) -> Unit,
     onCloseDrawer: () -> Unit,
-    wifiDirectPeers: List<android.net.wifi.p2p.WifiP2pDevice> = emptyList(),
-    modifier: Modifier = Modifier
+    localDeviceAddress: String = "",
+    localDeviceName: String = "You"
 ) {
-    Surface(
-        modifier = modifier
-            .fillMaxHeight()
-            .width(300.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
+    ModalDrawerSheet(
+        drawerShape = RoundedCornerShape(topEnd = 0.dp, bottomEnd = 0.dp),
+        drawerContainerColor = Color(0xFF0A0A0A),
+        drawerContentColor = ChatColors.TextPrimary,
+        drawerTonalElevation = 0.dp,
+        windowInsets = WindowInsets(0, 0, 0, 0)
     ) {
-        Column {
-            // Header
-            Surface(
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(270.dp)
+                .statusBarsPadding()
+                .border(
+                    BorderStroke(1.dp, Color(0xFF1F1F1F)),
+                    RoundedCornerShape(topEnd = 0.dp, bottomEnd = 0.dp)
+                )
+        ) {
+            // Header MESHOVIK
+            Text(
+                text = "МОЖЖЕВЕЛЬНИК",
+                fontFamily = SpaceMonoFont,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = ChatColors.Primary,
+                modifier = Modifier
+                    .padding(start = 20.dp, top = 20.dp, bottom = 16.dp)
+            )
+
+            // My Device
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .background(Color(0xFF111111), RoundedCornerShape(12.dp))
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+                Surface(
+                    modifier = Modifier.size(44.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color.Transparent,
                 ) {
-                    Text(
-                        text = "Meshovik",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onPrimary
+                    Icon(
+                        imageVector = Icons.Filled.Bluetooth,
+                        contentDescription = null,
+                        tint = ChatColors.Primary,
+                        modifier = Modifier.padding(10.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                Spacer(Modifier.width(6.dp))
+
+                Column(Modifier.weight(1f)) {
                     Text(
-                        text = "BLE Mesh Messenger",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                        text = "Вы · $localDeviceName",
+                        fontFamily = SpaceMonoFont,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = ChatColors.TextPrimary
                     )
                 }
             }
 
-            // Chat list
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(thickness = 1.dp, color = ChatColors.DividerColor)
+            Spacer(Modifier.height(8.dp))
+
+
+            val broadcastChat = chats.find { it.type == ChatType.BROADCAST }
+            if (broadcastChat != null) {
+                BroadcastChatDrawerItem(
+                    chat = broadcastChat,
+                    onClick = {
+                        onChatClick(broadcastChat)
+                        onCloseDrawer()
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // КОНТАКТЫ section
+            Text(
+                text = "КОНТАКТЫ",
+                fontFamily = SpaceMonoFont,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.TextSecondary,
+                letterSpacing = 1.2.sp,
+                modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
+            )
+
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(vertical = 8.dp)
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                // Broadcast chat always first
-                val broadcastChat = chats.find { it.type == ChatType.BROADCAST }
-                if (broadcastChat != null) {
-                    item {
-                        DrawerChatItem(
-                            chat = broadcastChat,
-                            onClick = {
-                                onChatClick(broadcastChat)
-                                onCloseDrawer()
-                            }
-                        )
-                        HorizontalDivider()
-                    }
-                }
-
-                // Direct chats
-                val directChats = chats.filter { it.type == ChatType.DIRECT }
-                if (directChats.isNotEmpty()) {
-                    items(directChats) { chat ->
-                        DrawerChatItem(
-                            chat = chat,
-                            onClick = {
-                                onChatClick(chat)
-                                onCloseDrawer()
-                            }
-                        )
-                        HorizontalDivider()
-                    }
-                }
-            }
-
-            // Wi-Fi Direct Peers (Debug)
-            if (wifiDirectPeers.isNotEmpty()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Wi-Fi Direct Peers (${wifiDirectPeers.size})",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        wifiDirectPeers.forEach { peer ->
-                            Text(
-                                text = "• ${peer.deviceName ?: "Unknown"}\n  ${peer.deviceAddress}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
-                    }
-                }
-            }
-
-            // Scanning button at bottom
-            Surface(
-                tonalElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    ScanningButton(
-                        isScanning = isScanning,
+                items(knownDevices) { device ->
+                    ContactDrawerItem(
+                        device = device,
                         onClick = {
-                            onScanningToggle()
+                            onDirectChatClick(device)
+                            onCloseDrawer()
                         }
                     )
                 }
@@ -139,7 +156,7 @@ fun ChatDrawerContent(
 }
 
 @Composable
-private fun DrawerChatItem(
+private fun BroadcastChatDrawerItem(
     chat: Chat,
     onClick: () -> Unit
 ) {
@@ -147,50 +164,78 @@ private fun DrawerChatItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = if (chat.type == ChatType.BROADCAST) "📡" else "👤",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Column(
-            modifier = Modifier.weight(1f)
+        Surface(
+            modifier = Modifier.size(42.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = Color.Transparent,
         ) {
-            Text(
-                text = chat.participantName,
-                style = MaterialTheme.typography.titleMedium
+            Icon(
+                imageVector = Icons.Filled.Radar,
+                contentDescription = null,
+                tint = ChatColors.Primary,
+                modifier = Modifier.padding(9.dp)
             )
-            if (chat.lastMessage != null) {
-                Text(
-                    text = chat.lastMessage,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
         }
 
-        Column(
-            horizontalAlignment = Alignment.End
+        Spacer(Modifier.width(14.dp))
+
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = chat.participantName,
+                fontFamily = SpaceMonoFont,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.TextPrimary
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContactDrawerItem(
+    device: MeshDevice,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            modifier = Modifier.size(42.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = Color(0xFF1A1A1A),
+            border = BorderStroke(1.dp, Color(0xFF333333))
         ) {
-            if (chat.lastMessageTime != null) {
-                Text(
-                    text = MeshUtils.formatTimestamp(chat.lastMessageTime),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (chat.unreadCount > 0) {
-                Badge(
-                    containerColor = MaterialTheme.colorScheme.primary
-                ) {
-                    Text(chat.unreadCount.toString())
-                }
-            }
+            Icon(
+                imageVector = Icons.Filled.Person,
+                contentDescription = null,
+                tint = ChatColors.TextPrimary,
+                modifier = Modifier.padding(9.dp)
+            )
+        }
+
+        Spacer(Modifier.width(14.dp))
+
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = device.userName.ifBlank { device.name },
+                fontFamily = SpaceMonoFont,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = ChatColors.TextPrimary
+            )
+            Text(
+                text = "в сети",   // позже заменим на реальный статус
+                fontFamily = SpaceMonoFont,
+                fontSize = 12.sp,
+                color = Color(0xFF00E5FF)
+            )
         }
     }
 }

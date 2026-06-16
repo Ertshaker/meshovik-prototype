@@ -463,12 +463,12 @@ class BleManager(
 
             _connectionStates.update { it + (address to ConnectionState.Connected(address)) }
 
-            sendUserInfo(address)
-            requestUserInfo(address)
-
             startObservingMtu(device, address)
             startObservingDevice(device, address)   // теперь безопасно
             Timber.i("✅ Successfully connected and observing: $address")
+
+            sendUserInfo(address)
+            requestUserInfo(address)
 
             device
         } catch (e: Exception) {

@@ -9,8 +9,6 @@ import android.os.Build
 import android.util.Base64
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
-import androidx.lifecycle.ViewModel
-import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.meshovik.ble.manager.BleManager
@@ -18,22 +16,17 @@ import com.meshovik.data.repository.MeshRepository
 import com.meshovik.database.MeshovikDatabase
 import com.meshovik.domain.entity.Attachment
 import com.meshovik.domain.entity.AttachmentType
+import com.meshovik.domain.entity.Chat
 import com.meshovik.domain.entity.ControlMessageType
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.domain.entity.MeshMessage
 import com.meshovik.domain.entity.MeshMessageStatus
-import com.meshovik.domain.entity.MessageType
 import com.meshovik.transfer.FileTransferManager
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -47,6 +40,7 @@ class MeshViewModel(
     private val bleManager: BleManager,
     private val meshRepository: MeshRepository,
     private val fileTransferManager: FileTransferManager,
+    private val database: MeshovikDatabase,
     applicationContext: Context
 ) : ScreenModel {
     private val scope = screenModelScope
@@ -69,6 +63,12 @@ class MeshViewModel(
         get() = bleManager.isMeshService
     val localUserName = MutableStateFlow(bleManager.getLocalName())
 
+    private val _chats = MutableStateFlow<List<Chat>>(emptyList())
+    val chats: StateFlow<List<Chat>> = _chats.asStateFlow()
+
+    val contacts: StateFlow<List<MeshDevice>>
+        get() = meshRepository.contacts
+
     init {
         Timber.e("=== MeshViewModel CREATED === instance=${System.identityHashCode(this)} | thread=${Thread.currentThread().name}")
         if (!observersLaunched) {
@@ -79,33 +79,22 @@ class MeshViewModel(
             observeMessages()
             observeFileTransfers()
             observeControlMessages()
+            observeChatsFromRepository()
 
             _uiState.update { it.copy(localDeviceAddress = localDeviceAddress) }
             startMeshService()
-            val driver = AndroidSqliteDriver(
-                MeshovikDatabase.Schema,
-                context,
-                "meshovik.db"
-            )
 
-            val database = MeshovikDatabase(driver)
-
-// ТЕСТ
-            database.meshovikQueries.insertOrReplaceUserProfile(
-                mesh_id = "test_id",
-                display_name = "Test User",
-                last_seen = System.currentTimeMillis(),
-                last_name_update = System.currentTimeMillis()
-            )
-
-            val user = database.meshovikQueries
-                .getUserProfile("test_id")
-                .executeAsOneOrNull()
-
-            println("USER FROM DB = $user")
             Timber.i("Observers launched for this ViewModel instance")
         } else {
             Timber.w("Observers already launched — skipping duplicate subscription")
+        }
+    }
+    private fun observeChatsFromRepository() {
+        scope.launch {
+            meshRepository.chats.collect { repoChats ->
+                _chats.value = repoChats
+                Timber.i("Chats updated in ViewModel: ${repoChats.size} items")
+            }
         }
     }
     private fun observeControlMessages() {
@@ -164,19 +153,30 @@ class MeshViewModel(
      */
     private fun observeDevices() {
         scope.launch {
-            Timber.i(">>> LAUNCH observeDevices | thread=${Thread.currentThread().name} | active jobs=   $${scope.coroutineContext[Job]?.children?.count()}")
             bleManager.discoveredDevices.collect { devices ->
-                // Deduplicate by address (safety net against BLE scanner emitting duplicates)
                 val uniqueDevices = devices.distinctBy { it.address }
+
                 uniqueDevices.forEach { device ->
                     meshRepository.updateDevice(device)
                     meshRepository.updateChatFromDevice(device)
                 }
+
                 _uiState.update { it.copy(devices = uniqueDevices) }
             }
         }
     }
 
+    fun isContactFlow(meshIdOrAddress: String): StateFlow<Boolean> {
+        return meshRepository.contacts.map { contacts ->
+            contacts.any {
+                it.meshId == meshIdOrAddress || it.address == meshIdOrAddress
+            }
+        }.stateIn(
+            scope = scope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = false
+        )
+    }
     /**
      * Observes received messages from BLE manager.
      * При получении сообщения с вложением — автоматически запускает приём файла.
@@ -192,9 +192,8 @@ class MeshViewModel(
                         message.senderId == bleManager.getLocalAddress()
 
                 if (isOwnMessage) {
-                    meshRepository.addSentMessage(message)
                     _uiState.update { it.copy(sentMessages = it.sentMessages + message) }
-                    Timber.d("Own message echo: ${message.id}")
+                    Timber.d("Own message echo received: ${message.id}")
                     return@collect
                 }
 
@@ -218,7 +217,6 @@ class MeshViewModel(
             }
         }
     }
-
     @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun handleIncomingAttachment(senderAddress: String, attachment: Attachment) {
         try {
@@ -231,6 +229,27 @@ class MeshViewModel(
         }
     }
 
+    fun addToContacts(device: MeshDevice) {
+        val meshId = device.meshId.ifBlank { device.address }
+        if (meshId.isBlank()) {
+            scope.launch { _events.emit(MeshEvent.Error("Невозможно добавить контакт")) }
+            return
+        }
+
+        val displayName = device.userName.ifBlank { device.name.ifBlank { "Unknown" } }
+
+        meshRepository.addOrUpdateContact(meshId, displayName)
+Timber.i("Контакт добавлен: $displayName ($meshId)")
+        scope.launch {
+            _events.emit(MeshEvent.ContactAdded(device.copy(userName = displayName)))
+        }
+    }
+    fun removeFromContacts(meshId: String) {
+        meshRepository.deleteContact(meshId)
+        scope.launch {
+            _events.emit(MeshEvent.ContactRemoved(meshId))
+        }
+    }
     /**
      * Observes file transfer states.
      */
@@ -240,22 +259,49 @@ class MeshViewModel(
                 _uiState.update { it.copy(fileTransfers = transfers) }
 
                 transfers.values.forEach { state ->
-                    when {
-                        state.status == FileTransferStatus.COMPLETED && !state.isSender -> {
-                            state.localUri?.let { uri ->
-                                meshRepository.updateAttachmentLocalUri(state.transferId, uri)
-                                _events.emit(MeshEvent.FileReceived(
-                                    attachment = findAttachmentById(state.transferId)!! /* найди по id или передавай из FileTransferState */,
-                                    localUri = uri
-                                ))
+                    when (state.status) {
+                        FileTransferStatus.COMPLETED -> {
+                            if (!state.isSender) {
+                                // Входящий файл
+                                state.localUri?.let { uri ->
+                                    meshRepository.updateAttachmentLocalUri(state.transferId, uri)
+
+                                    _uiState.update { current ->
+                                        val updatedReceived = current.receivedMessages.map { msg ->
+                                            if (msg.attachment?.id == state.transferId) {
+                                                msg.copy(attachment = msg.attachment?.copy(localUri = uri))
+                                            } else msg
+                                        }
+                                        current.copy(receivedMessages = updatedReceived)
+                                    }
+                                }
+                            } else {
+                                updateOutgoingAttachmentStatus(state.transferId, MeshMessageStatus.DELIVERED)
                             }
                         }
-                        state.status == FileTransferStatus.FAILED -> {
-                            _events.emit(MeshEvent.Error("Ошибка приёма файла ${state.transferId}"))
+
+                        FileTransferStatus.FAILED -> {
+                            updateOutgoingAttachmentStatus(state.transferId, MeshMessageStatus.FAILED)
+                            _events.emit(MeshEvent.Error("Ошибка отправки файла ${state.transferId}"))
                         }
+
+                        else -> {}
                     }
                 }
             }
+        }
+    }
+
+
+
+    private fun updateOutgoingAttachmentStatus(attachmentId: String, status: MeshMessageStatus) {
+        _uiState.update { current ->
+            val updatedSent = current.sentMessages.map { msg ->
+                if (msg.attachment?.id == attachmentId) {
+                    msg.copy(status = status)
+                } else msg
+            }
+            current.copy(sentMessages = updatedSent)
         }
     }
     private fun findAttachmentById(transferId: String): Attachment? {
@@ -363,6 +409,8 @@ class MeshViewModel(
                 val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
                 val (width, height) = getImageDimensions(imageUri)
                 val attachmentId = UUID.randomUUID().toString().take(12)
+                val messageId = UUID.randomUUID().toString().take(8)
+
 
                 val attachment = Attachment     (
                     id = attachmentId,
@@ -374,6 +422,19 @@ class MeshViewModel(
                     width = width,
                     height = height
                 )
+                val bytes = context.contentResolver.openInputStream(imageUri)?.use {
+                    it.readBytes()
+                } ?: throw IllegalStateException("Не удалось прочитать изображение")
+
+                val finalAttachment = attachment.copy(
+                    id = attachmentId,
+                    sizeBytes = bytes.size.toLong(),
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    type = AttachmentType.IMAGE
+                )
+
+                val message = bleManager.sendMessageWithAttachment(targetAddress, finalAttachment)
 
                 Timber.i("Nearby Отправляю изображение $targetAddress")
 
@@ -567,4 +628,6 @@ sealed class MeshEvent {
     data class IncomingFileTransfer(val attachment: Attachment) : MeshEvent()
     /** Файл успешно получен по Wi-Fi Direct */
     data class FileReceived(val attachment: Attachment, val localUri: String) : MeshEvent()
+    data class ContactAdded(val device: MeshDevice) : MeshEvent()
+    data class ContactRemoved(val meshId: String) : MeshEvent()
 }

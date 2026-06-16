@@ -8,5 +8,5 @@ import org.koin.dsl.module
  */
 val commonModule = module {
     // Repository
-    single { MeshRepository() }
+    single { MeshRepository(get(), get()) }
 }

@@ -72,36 +72,23 @@ actual class FileTransferManager(
     actual suspend fun sendFile(
         attachment: Attachment,
         localUri: String,
-        targetMeshId: String
+        targetMeshId: String,
     ): String {
         val transferId = attachment.id ?: UUID.randomUUID().toString()
 
         return try {
-            val androidUri = localUri.toUri()
-            val bytes = context.contentResolver.openInputStream(androidUri)?.use {
-                it.readBytes()
-            } ?: throw IllegalStateException("Не удалось прочитать изображение")
-
-            val fileName = "image_${System.currentTimeMillis()}.jpg"
-            val mimeType = context.contentResolver.getType(androidUri) ?: "image/jpeg"
-
-            val finalAttachment = attachment.copy(
-                id = transferId,
-                sizeBytes = bytes.size.toLong(),
-                fileName = fileName,
-                mimeType = mimeType,
-                type = AttachmentType.IMAGE
-            )
-
             updateTransferState(
                 transferId = transferId,
                 status = FileTransferStatus.TRANSFERRING,
-                totalBytes = finalAttachment.sizeBytes,
+                totalBytes = attachment.sizeBytes,
                 isSender = true,
             )
+            val bytes = context.contentResolver.openInputStream(localUri.toUri())?.use {
+                it.readBytes()
+            } ?: throw IllegalStateException("Не удалось прочитать изображение")
 
-            activeTransfers[transferId] = TransferSession(finalAttachment, isSender = true)
-            bleManager.sendMessageWithAttachment(targetMeshId, finalAttachment)
+            activeTransfers[transferId] = TransferSession(attachment, isSender = true)
+            val message = bleManager.sendMessageWithAttachment(targetMeshId, attachment)
             delay(1500)
             sendImageData(transferId, targetMeshId, bytes)
 

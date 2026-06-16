@@ -66,22 +66,19 @@ object ChatListScreen : Screen {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val isMeshActive by viewModel.isMeshServiceActive.collectAsState()
-//        val isBleActive by viewModel.isBleActive.collectAsState()
-        // Start advertising and scanning on launch
-        LaunchedEffect(Unit) {}
-
+        val deviceName = viewModel.localUserName.collectAsState()
         // Build chat list from devices + broadcast
         val chatList = remember(uiState.devices) {
             buildList {
-                // Broadcast всегда показываем
+                // Broadcast ВСЕГДА должен быть первым
                 add(Chat.createBroadcastChat())
 
-                // Показываем только те устройства, у которых уже есть userName
+                // Прямые чаты из устройств
                 uiState.devices
                     .filter { device ->
                         device.userName.isNotBlank() &&
                                 device.userName != "Unknown" &&
-                                device.meshId.isNotBlank() // дополнительная страховка
+                                device.meshId.isNotBlank()
                     }
                     .forEach { device ->
                         add(Chat.fromDevice(device))
@@ -96,8 +93,7 @@ object ChatListScreen : Screen {
             drawerContent = {
                 ChatDrawerContent(
                     chats = chatList,
-                    isScanning = uiState.isScanning,
-                    wifiDirectPeers = uiState.wifiDirectPeers,
+                    knownDevices = viewModel.contacts.value,
                     onChatClick = { chat ->
                         when (chat.type) {
                             ChatType.BROADCAST -> {
@@ -107,16 +103,28 @@ object ChatListScreen : Screen {
                                 navigator.push(
                                     DirectChatScreen(
                                         participantAddress = chat.id,
-                                        participantName = chat.participantName
+                                        participantName = chat.participantName,
+                                        meshId = chat.participantMeshId!!
                                     )
                                 )
                             }
                         }
                     },
-                    onScanningToggle = {},
+                    onDirectChatClick = { device ->
+                        // Переход в DirectChat из контактов
+                        navigator.push(
+                            DirectChatScreen(
+                                participantAddress = device.meshId.ifBlank { device.address },
+                                participantName = device.userName.ifBlank { device.name },
+                                meshId = device.meshId
+                            )
+                        )
+                    },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
-                    }
+                    },
+                    localDeviceAddress = uiState.localDeviceAddress,
+                    localDeviceName = deviceName.value
                 )
             }
         ) {
@@ -290,8 +298,8 @@ object ChatListScreen : Screen {
                                             navigator.push(BroadcastChatScreen)
                                         }
                                         ChatType.DIRECT -> {
-                                            chat.participantAddress?.let { address ->
-                                                navigator.push(DirectChatScreen(address, chat.participantName))
+                                            chat.participantAddress.let { address ->
+                                                navigator.push(DirectChatScreen(address, chat.participantName, chat.participantMeshId!!))
                                             }
                                         }
                                     }
