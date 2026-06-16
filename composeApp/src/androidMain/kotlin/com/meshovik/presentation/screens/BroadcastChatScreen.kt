@@ -240,7 +240,8 @@ private fun BroadcastMessageItem(
                             attachment = message.attachment,
                             transferState = transferState,
                             participantAddress = "BROADCAST",
-                            onImageClick = onImageClick
+                            onImageClick = onImageClick,
+                            isFromMe = isFromMe
                         )
                         if (message.content.isNotBlank()) {
                             Spacer(modifier = Modifier.height(6.dp))

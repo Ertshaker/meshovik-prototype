@@ -174,10 +174,15 @@ data class DirectChatScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(directMessages.reversed()) { message ->
-                        val transferState = message.attachment?.let {
-                            uiState.fileTransfers[it.id]
-                        }
+                    items(
+                        items = directMessages.reversed(),
+                        key = { message -> message.id }   // ← КРИТИЧНО!
+                    ) { message ->
+                        val attachmentId = message.attachment?.id
+
+                        val transferState = if (attachmentId != null) {
+                            uiState.fileTransfers[attachmentId]
+                        } else null
                         DirectMessageItem(
                             message = message,
                             localDeviceAddress = uiState.localDeviceAddress,
@@ -411,7 +416,8 @@ private fun DirectMessageItem(
                             attachment = message.attachment,
                             transferState = transferState,
                             participantAddress = participantAddress,
-                            onImageClick = onImageClick
+                            onImageClick = onImageClick,
+                            isFromMe = isFromMe
                         )
                         if (message.content.isNotBlank()) {
                             Spacer(modifier = Modifier.height(6.dp))
@@ -460,16 +466,19 @@ fun ImageAttachmentContent(
     attachment: Attachment,
     transferState: FileTransferState?,
     participantAddress: String,
-    onImageClick: (String) -> Unit
+    onImageClick: (String) -> Unit,
+    isFromMe: Boolean,
 ) {
     val localUri = attachment.localUri
         ?: transferState?.localUri?.takeIf { transferState.status == FileTransferStatus.COMPLETED }
+
     val isTransferring = transferState?.status == FileTransferStatus.TRANSFERRING ||
             transferState?.status == FileTransferStatus.PENDING
 
+    val isCompleted = transferState?.status == FileTransferStatus.COMPLETED
     val isFailed = transferState?.status == FileTransferStatus.FAILED
 
-    Timber.i("ИЗОБРАЖЕНИЕ В ДИРЕКТЧАТЕ: $localUri $isFailed $isTransferring ${transferState?.status == FileTransferStatus.COMPLETED}")
+    Timber.i("IMAGE DEBUG → id=${attachment.id} | localUri=$localUri | status=${transferState?.status} | transferring=$isTransferring | completed=$isCompleted")
 
     Box(
         modifier = Modifier
@@ -479,7 +488,9 @@ fun ImageAttachmentContent(
             .background(ChatColors.CardBg)
     ) {
         when {
-            localUri != null -> {
+            (localUri != null && localUri.startsWith("content") && isFromMe)
+                    || (localUri != null && !localUri.startsWith("content") && !isFromMe)
+                    || (localUri != null && localUri.startsWith("file") && isFromMe) -> {
                 AsyncImage(
                     model = localUri.toUri(),
                     contentDescription = null,

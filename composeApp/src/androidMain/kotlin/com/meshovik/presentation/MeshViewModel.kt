@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Base64
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
+import androidx.core.net.toUri
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
 import com.meshovik.ble.manager.BleManager
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.UUID
 
 /**
@@ -118,9 +120,6 @@ class MeshViewModel(
         scope.launch {
             bleManager.setNewUserName(newName)
             localUserName.value = newName
-
-            stopMeshService()
-            startMeshService()
         }
     }
     /**
@@ -159,7 +158,6 @@ class MeshViewModel(
 
                 uniqueDevices.forEach { device ->
                     meshRepository.updateDevice(device)
-                    meshRepository.updateChatFromDevice(device)
                 }
 
                 _uiState.update { it.copy(devices = uniqueDevices) }
@@ -198,8 +196,6 @@ class MeshViewModel(
                     return@collect
                 }
 
-                meshRepository.addReceivedMessage(message)
-
                 message.attachment?.let { attachment ->
                     if (attachment.id in processingAttachments) return@let
 
@@ -207,13 +203,15 @@ class MeshViewModel(
 
                     launch {
                         try {
-                            handleIncomingAttachment(message.senderId, attachment)
-                        } finally {
-                            processingAttachments.remove(attachment.id)
+                            val newAttachmentWithoutUri = attachment.copy(localUri = null)
+                            handleIncomingAttachment(message.senderId, newAttachmentWithoutUri)
+                            Timber.i("FIle ДА Я ТУТ ДА КОНЕЧНО")
+                        } catch (e: Exception) {
+                            Timber.e(e, "FILE Я ОБОСРАЛСЯ")
                         }
                     }
                 }
-
+                meshRepository.addReceivedMessage(message)
                 _uiState.update { it.copy(receivedMessages = it.receivedMessages + message) }
             }
         }
@@ -263,7 +261,6 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
                     when (state.status) {
                         FileTransferStatus.COMPLETED -> {
                             if (!state.isSender) {
-                                // Входящий файл
                                 state.localUri?.let { uri ->
                                     meshRepository.updateAttachmentLocalUri(state.transferId, uri)
 
@@ -286,14 +283,18 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
                             _events.emit(MeshEvent.Error("Ошибка отправки файла ${state.transferId}"))
                         }
 
+                        // Можно добавить логи для отладки
+                        FileTransferStatus.TRANSFERRING,
+                        FileTransferStatus.PENDING -> {
+                            Timber.d("Transfer progress: ${state.transferId} - ${state.status} ${state.progressBytes}/${state.totalBytes}")
+                        }
+
                         else -> {}
                     }
                 }
             }
         }
     }
-
-
 
     private fun updateOutgoingAttachmentStatus(attachmentId: String, status: MeshMessageStatus) {
         _uiState.update { current ->
@@ -407,12 +408,21 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
     fun sendImage(targetAddress: String, imageUri: Uri, caption: String = "") {
         scope.launch {
             try {
+                // НЕ МЕНЯТЬ РАЗМЕР НИ В КОЕМ СЛУЧАЕ!!!!
+                val transferId = UUID.randomUUID().toString().take(12)
                 val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
                 val (width, height) = getImageDimensions(imageUri)
-                val attachmentId = UUID.randomUUID().toString().take(16)
+                val attachmentId = UUID.randomUUID().toString().take(12)
+                val bytes = context.contentResolver.openInputStream(imageUri)?.use {
+                    it.readBytes()
+                } ?: throw IllegalStateException("Не удалось прочитать изображение")
+
+                val dir = File(context.getExternalFilesDir(null), "MeshImages").apply { mkdirs() }
+                val file = File(dir, "${transferId}_$fileName")
+                file.writeBytes(bytes)
 
                 val attachment = Attachment (
-                    id = attachmentId,
+                    id = transferId,
                     type = AttachmentType.IMAGE,
                     fileName = fileName,
                     mimeType = mimeType,
@@ -421,33 +431,36 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
                     width = width,
                     height = height
                 )
-                val bytes = context.contentResolver.openInputStream(imageUri)?.use {
-                    it.readBytes()
-                } ?: throw IllegalStateException("Не удалось прочитать изображение")
 
                 val finalAttachment = attachment.copy(
-                    id = attachmentId,
+                    id = transferId,
                     sizeBytes = bytes.size.toLong(),
                     fileName = fileName,
                     mimeType = mimeType,
-                    type = AttachmentType.IMAGE
+                    type = AttachmentType.IMAGE,
                 )
-
+                // 1. Если статус нуль, юри начинается с файл - значит это файл, который уже есть в бд, он наш
+                // 2. если статус комплит, юри начинается с файл и мы не отправитель
+                //
                 val message = bleManager.sendMessageWithAttachment(targetAddress, finalAttachment)
+                val attachmentWithRightUri = attachment.copy(localUri = file.toUri().toString())
+                val messageWithRightUri = message.copy(attachment = attachmentWithRightUri)
 
-                meshRepository.addSentMessage(message)
+                meshRepository.addSentMessage(messageWithRightUri)
                 _uiState.update {
-                    it.copy(sentMessages = it.sentMessages + message)
+                    it.copy(sentMessages = it.sentMessages + messageWithRightUri)
                 }
 
-                Timber.i("Nearby Отправляю изображение $targetAddress")
-                delay(1500)
-                // Отправляем файл через Nearby
+                Timber.i("Nearby Отправляю изображение $targetAddress ")
+
+                meshRepository.updateAttachmentLocalUri(transferId, file.toUri().toString())
                 fileTransferManager.sendFile(
                     attachment = attachment,
                     localUri = imageUri.toString(),
-                    targetMeshId = targetAddress
+                    targetMeshId = targetAddress,
+                    transferId
                 )
+
             } catch (e: Exception) {
                 Timber.e(e, "sendImage failed")
                 _events.emit(MeshEvent.Error("Не удалось отправить изображение: ${e.message}"))
@@ -472,7 +485,7 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
                     ?: _uiState.value.receivedMessages.find { it.attachment?.id == transferId }
 
                 message?.attachment?.let {
-                    fileTransferManager.sendFile(it, it.localUri ?: "", targetAddress)
+                    fileTransferManager.sendFile(it, it.localUri ?: "", targetAddress, transferId)
                 }
             }
         }

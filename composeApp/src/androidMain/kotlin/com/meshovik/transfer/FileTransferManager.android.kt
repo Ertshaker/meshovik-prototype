@@ -64,6 +64,7 @@ actual class FileTransferManager(
     private fun observeFileChunks() {
         scope.launch {
             bleManager.fileChunksReceived.collect { (transferId, chunk) ->
+                Timber.i("FILE CHUNKS: $transferId")
                 onImageDataReceived(transferId, chunk)
             }
         }
@@ -73,9 +74,8 @@ actual class FileTransferManager(
         attachment: Attachment,
         localUri: String,
         targetMeshId: String,
+        transferId: String
     ): String {
-        val transferId = attachment.id ?: UUID.randomUUID().toString()
-
         return try {
             updateTransferState(
                 transferId = transferId,
@@ -87,7 +87,7 @@ actual class FileTransferManager(
                 it.readBytes()
             } ?: throw IllegalStateException("Не удалось прочитать изображение")
 
-            activeTransfers[transferId] = TransferSession(attachment, isSender = true)
+            delay(1500)
             sendImageData(transferId, targetMeshId, bytes)
 
             transferId
@@ -118,7 +118,11 @@ actual class FileTransferManager(
     }
 
     fun onImageDataReceived(transferId: String, packet: ByteArray) {
-        val session = activeTransfers[transferId] ?: return
+        val session = activeTransfers[transferId]
+        if (session == null) {
+            Timber.i("File Я ЧМОШНИК")
+            return
+        }
 
         session.receivedBytes += packet
 
@@ -129,9 +133,10 @@ actual class FileTransferManager(
             status = FileTransferStatus.PENDING,
             progressBytes = progress,
             totalBytes = session.attachment.sizeBytes,
+            localUri = "",
             isSender = false
         )
-        Timber.i("File successfully saved: $progress ${session.attachment.sizeBytes}")
+        Timber.i("File successfully saved: $progress ${session.attachment?.sizeBytes}")
         if (progress >= session.attachment.sizeBytes) {
             completeReceiving(transferId, session)
         }
@@ -163,7 +168,7 @@ actual class FileTransferManager(
     fun startReceiving(transferId: String, attachment: Attachment, senderAddress: String) {
         activeTransfers.getOrPut(transferId) {
             TransferSession(
-                attachment = attachment.copy(sizeBytes = attachment.sizeBytes), // важно!
+                attachment = attachment.copy(sizeBytes = attachment.sizeBytes, localUri = null), // важно!
                 isSender = false
             )
         }

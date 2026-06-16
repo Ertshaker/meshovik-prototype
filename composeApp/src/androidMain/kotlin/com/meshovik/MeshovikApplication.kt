@@ -30,7 +30,6 @@ class MeshovikApplication : Application() {
             androidLogger(Level.DEBUG)
             androidContext(this@MeshovikApplication)
             modules(
-                commonModule,
                 androidModule,
             )
         }

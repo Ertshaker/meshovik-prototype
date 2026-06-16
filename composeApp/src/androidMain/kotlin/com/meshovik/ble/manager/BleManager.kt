@@ -158,6 +158,7 @@ class BleManager(
         val controlMsg = tryParseControlMessage(data)
         if (controlMsg != null) {
             scope.launch {
+                Timber.e("FILE ПРИШЁЛ КОНТРОЛЬНЫЙ ПАКЕТ ${controlMsg.attachmentId} ${controlMsg.type.toString()}")
                 handleControlMessage(controlMsg, source)
                 _controlMessages.emit(controlMsg)
             }
@@ -186,7 +187,10 @@ class BleManager(
                 sendUserInfo(controlMsg.senderId)
             }
             ControlMessageType.READY_FOR_TRANSFER -> {
-                scope.launch { _controlMessages.emit(controlMsg) }
+                Timber.i("FILE ДА Я ФАЙЛ")
+                scope.launch {
+                    _controlMessages.emit(controlMsg)
+                }
             }
         }
     }
@@ -543,11 +547,6 @@ class BleManager(
     private fun handleReceivedMessage(sourceBleAddress: String, message: MeshMessage) {
         var finalMessage = message
 
-        val device = _discoveredDevices.value.find { it.address == sourceBleAddress }
-        if (device?.userName.isNullOrBlank()) {
-            scope.launch { requestUserInfo(message.senderId) }
-        }
-
         // Специальная обработка WIFI_HANDSHAKE (оставляем как есть)
         if (message.content.contains("WIFI_HANDSHAKE")) {
             try {
@@ -743,6 +742,7 @@ class BleManager(
         caption: String = ""
     ): MeshMessage {
         val messageId = UUID.randomUUID().toString().take(8)
+
         val message = MeshMessage(
             id = messageId,
             senderId = localDeviceAddress,
@@ -755,11 +755,10 @@ class BleManager(
             hopCount = 0,
             attachment = attachment
         )
+
         scope.launch {
             _receivedMessages.emit(message)
         }
-        // Сохраняем сразу в локальный список
-
 
         scope.launch {
             val packetData = createMeshPacket(
@@ -858,7 +857,6 @@ class BleManager(
             // Рассылаем новое имя всем, с кем мы когда-либо общались / кого видим
             val targets = mutableSetOf<String>()
 
-            // 1. Все подключённые устройства
             targets.addAll(connectedDevices.keys)
 
             // 2. Все устройства из discoveredDevices (на всякий случай)
@@ -866,11 +864,6 @@ class BleManager(
                 if (device.address != localDeviceAddress) {
                     targets.add(device.address)
                 }
-            }
-
-            // 3. Через meshId mapping (если есть)
-            meshIdToBleMap.values.forEach { bleAddress ->
-                if (bleAddress != localDeviceAddress) targets.add(bleAddress)
             }
 
             Timber.i("Broadcasting new username to ${targets.size} devices: $newUserName")

@@ -33,7 +33,8 @@ expect class FileTransferManager {
     suspend fun sendFile(
         attachment: Attachment,
         localUri: String,
-        targetMeshId: String
+        targetMeshId: String,
+        transferId: String
     ): String
 
     /**
