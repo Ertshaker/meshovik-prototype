@@ -469,6 +469,8 @@ fun ImageAttachmentContent(
 
     val isFailed = transferState?.status == FileTransferStatus.FAILED
 
+    Timber.i("ИЗОБРАЖЕНИЕ В ДИРЕКТЧАТЕ: $localUri $isFailed $isTransferring ${transferState?.status == FileTransferStatus.COMPLETED}")
+
     Box(
         modifier = Modifier
             .width(IntrinsicSize.Max)

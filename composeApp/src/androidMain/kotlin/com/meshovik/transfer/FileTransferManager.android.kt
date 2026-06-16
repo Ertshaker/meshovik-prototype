@@ -88,8 +88,6 @@ actual class FileTransferManager(
             } ?: throw IllegalStateException("Не удалось прочитать изображение")
 
             activeTransfers[transferId] = TransferSession(attachment, isSender = true)
-            val message = bleManager.sendMessageWithAttachment(targetMeshId, attachment)
-            delay(1500)
             sendImageData(transferId, targetMeshId, bytes)
 
             transferId
@@ -128,7 +126,7 @@ actual class FileTransferManager(
 
         updateTransferState(
             transferId = transferId,
-            status = FileTransferStatus.TRANSFERRING,
+            status = FileTransferStatus.PENDING,
             progressBytes = progress,
             totalBytes = session.attachment.sizeBytes,
             isSender = false

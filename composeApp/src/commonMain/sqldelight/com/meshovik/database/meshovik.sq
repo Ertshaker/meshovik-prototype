@@ -63,7 +63,7 @@ CREATE TABLE messages (
     receiver_id TEXT NOT NULL,
     type TEXT NOT NULL REFERENCES message_types(type_name),
     content TEXT,
-    attachment_id INTEGER,
+    attachment_id TEXT,
     timestamp INTEGER NOT NULL
 );
 
@@ -86,8 +86,7 @@ DELETE FROM messages;
 
 -- 5. Attachments
 CREATE TABLE attachments (
-INTEGER
-    attachment_id TEXT NOT NULL,
+    attachment_id TEXT PRIMARY KEY NOT NULL,
     message_id TEXT NOT NULL,
     type TEXT NOT NULL,
     file_name TEXT NOT NULL,
@@ -132,3 +131,9 @@ SELECT * FROM messages
 WHERE conversation_id = ?
 ORDER BY timestamp DESC
 LIMIT 1;
+
+getMessageById:
+SELECT * FROM messages WHERE message_id = ? LIMIT 1;
+
+getAttachmentByAttachmentId:
+SELECT * FROM attachments WHERE attachment_id = ? LIMIT 1;

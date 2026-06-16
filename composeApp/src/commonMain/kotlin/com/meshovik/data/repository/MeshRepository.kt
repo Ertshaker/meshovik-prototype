@@ -228,7 +228,7 @@ class MeshRepository(
                 }
 
             } catch (e: Exception) {
-                throw e
+                // Можно пробросить или обработать ошибку по-другому
             }
         }
     }
@@ -289,7 +289,10 @@ class MeshRepository(
 
     fun addReceivedMessage(message: MeshMessage) {
         _messages.update { current ->
-            if (current.any { it.id == message.id }) current else current + message
+            if (current.any { it.id == message.id }) {
+                return@update current
+            }
+            current + message
         }
 
         val chatId = if (message.receiverId == "BROADCAST") "broadcast" else message.senderId
@@ -329,7 +332,10 @@ class MeshRepository(
     }
     fun addSentMessage(message: MeshMessage) {
         _sentMessages.update { current ->
-            if (current.any { it.id == message.id }) current else current + message
+            if (current.any { it.id == message.id }) {
+                return@update current
+            }
+            current + message
         }
 
         val chatId = if (message.receiverId == "BROADCAST") "broadcast" else message.receiverId
@@ -342,23 +348,36 @@ class MeshRepository(
     private fun saveMessageToDb(message: MeshMessage) {
         repositoryScope.launch {
             try {
-                val attachmentId = message.attachment?.id
+                val attachment = message.attachment
 
-                // Сохраняем attachment, если есть
-                message.attachment?.let { att ->
-                    database.meshovikQueries.insertAttachment(
-                        attachment_id = att.id,
-                        message_id = message.id,
-                        type = "image",
-                        file_name = att.fileName,
-                        mime_type = att.mimeType,
-                        size_bytes = att.sizeBytes,
-                        local_uri = att.localUri,
-                        thumbnail_base64 = null
-                    )
+                // === ЗАЩИТА ОТ ДУБЛЕЙ ATTACHMENT ===
+                if (attachment != null) {
+                    val existingAttachment = database.meshovikQueries.getAttachmentByAttachmentId(attachment.id)
+                        .executeAsOneOrNull()
+
+                    if (existingAttachment != null) {
+                    } else {
+                        database.meshovikQueries.insertAttachment(
+                            attachment_id = attachment.id,
+                            message_id = message.id,
+                            type = "image",
+                            file_name = attachment.fileName,
+                            mime_type = attachment.mimeType,
+                            size_bytes = attachment.sizeBytes,
+                            local_uri = attachment.localUri,
+                            thumbnail_base64 = null
+                        )
+                    }
                 }
 
-                // Сохраняем сообщение
+                // === ЗАЩИТА ОТ ДУБЛЕЙ MESSAGE ===
+                val existingMessage = database.meshovikQueries.getMessageById(message.id)
+                    .executeAsOneOrNull()
+
+                if (existingMessage != null) {
+                    return@launch
+                }
+
                 val conversationId = when {
                     message.receiverId == "BROADCAST" -> "broadcast"
                     message.senderId == localDeviceId -> message.receiverId
@@ -372,11 +391,12 @@ class MeshRepository(
                     receiver_id = message.receiverId,
                     type = if (message.type == MessageType.ATTACHMENT) "image" else "text",
                     content = message.content,
-                    attachment_id = attachmentId,
+                    attachment_id = attachment?.id,   // UUID как текст
                     timestamp = message.timestamp
                 )
+
+
             } catch (e: Exception) {
-                throw e
             }
         }
     }

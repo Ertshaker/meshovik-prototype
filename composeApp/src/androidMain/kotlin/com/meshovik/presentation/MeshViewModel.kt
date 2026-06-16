@@ -25,6 +25,7 @@ import com.meshovik.transfer.FileTransferManager
 import com.meshovik.transfer.FileTransferState
 import com.meshovik.transfer.FileTransferStatus
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -408,11 +409,9 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
             try {
                 val (fileName, mimeType, sizeBytes) = getFileMetadata(imageUri)
                 val (width, height) = getImageDimensions(imageUri)
-                val attachmentId = UUID.randomUUID().toString().take(12)
-                val messageId = UUID.randomUUID().toString().take(8)
+                val attachmentId = UUID.randomUUID().toString().take(16)
 
-
-                val attachment = Attachment     (
+                val attachment = Attachment (
                     id = attachmentId,
                     type = AttachmentType.IMAGE,
                     fileName = fileName,
@@ -436,16 +435,19 @@ Timber.i("Контакт добавлен: $displayName ($meshId)")
 
                 val message = bleManager.sendMessageWithAttachment(targetAddress, finalAttachment)
 
-                Timber.i("Nearby Отправляю изображение $targetAddress")
+                meshRepository.addSentMessage(message)
+                _uiState.update {
+                    it.copy(sentMessages = it.sentMessages + message)
+                }
 
+                Timber.i("Nearby Отправляю изображение $targetAddress")
+                delay(1500)
                 // Отправляем файл через Nearby
                 fileTransferManager.sendFile(
                     attachment = attachment,
                     localUri = imageUri.toString(),
                     targetMeshId = targetAddress
                 )
-
-
             } catch (e: Exception) {
                 Timber.e(e, "sendImage failed")
                 _events.emit(MeshEvent.Error("Не удалось отправить изображение: ${e.message}"))

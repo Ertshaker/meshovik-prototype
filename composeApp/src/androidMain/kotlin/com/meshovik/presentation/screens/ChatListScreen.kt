@@ -70,10 +70,8 @@ object ChatListScreen : Screen {
         // Build chat list from devices + broadcast
         val chatList = remember(uiState.devices) {
             buildList {
-                // Broadcast ВСЕГДА должен быть первым
                 add(Chat.createBroadcastChat())
 
-                // Прямые чаты из устройств
                 uiState.devices
                     .filter { device ->
                         device.userName.isNotBlank() &&
