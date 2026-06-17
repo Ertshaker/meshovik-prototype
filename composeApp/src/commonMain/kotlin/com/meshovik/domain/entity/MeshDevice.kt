@@ -18,7 +18,7 @@ data class MeshDevice(
     @Contextual
     val lastSeen: Instant = Instant.DISTANT_PAST,
 
-    val isOnline: Boolean = false,
+    var isOnline: Boolean = false,
     val hopCount: Int = 0,
 
     /**

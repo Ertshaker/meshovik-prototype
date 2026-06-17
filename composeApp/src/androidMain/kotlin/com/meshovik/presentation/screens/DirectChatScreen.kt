@@ -14,12 +14,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.BluetoothDisabled
+import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PersonRemove
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -70,6 +74,9 @@ data class DirectChatScreen(
             viewModel.getMessagesFlowForChat(participantAddress)
         }
 
+        val participantDevice: MeshDevice? by viewModel.getParticipantDeviceFlow(meshId)
+            .collectAsState(initial = null)
+
         val isAlreadyContact by viewModel.isContactFlow(meshId)
             .collectAsState(initial = false)
 
@@ -95,6 +102,8 @@ data class DirectChatScreen(
             }
         }
 
+        var menuExpanded by remember { mutableStateOf(false) }
+
         LaunchedEffect(directMessages, participantAddress) {
             Timber.w("CHAT DEBUG: Opened chat with address: $participantAddress")
             Timber.w("CHAT DEBUG: ${directMessages.size} messages")
@@ -105,13 +114,35 @@ data class DirectChatScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            participantName,
-                            color = ChatColors.TextPrimary,
-                            fontFamily = SpaceMonoFont,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    participantName,
+                                    color = ChatColors.TextPrimary,
+                                    fontFamily = SpaceMonoFont,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp,
+                                    lineHeight = 20.sp
+                                )
+                                participantDevice?.let {
+                                    if (!it.isOnline) {
+                                        Text(
+                                            text = "Был в сети ${MeshUtils.formatTimestamp(it.lastSeen.toEpochMilliseconds())}",
+                                            fontFamily = SpaceMonoFont,
+                                            fontSize = 12.sp,
+                                            color = Color(0x6900E5FF),
+                                            lineHeight = 14.sp
+                                        )
+                                    }
+                                }
+                            }
+                            participantDevice?.let {
+                                if (it.isOnline) {
+                                    StatusPulse(active = it.isOnline)
+                                }
+                            }
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = { navigator.pop() }) {
@@ -127,35 +158,39 @@ data class DirectChatScreen(
                     ),
                     actions = {
                         Box{
-                            if (!isAlreadyContact) {
-                                IconButton(onClick = {
-                                    val device = MeshDevice(
-                                        id = participantAddress,
-                                        name = participantName,
-                                        address = participantAddress,
-                                        meshId = meshId,
-                                        userName = participantName,
-                                        wifiDirectAddress = ""
-                                    )
-                                    viewModel.addToContacts(device)
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Filled.PersonAdd,
-                                        contentDescription = "Добавить в контакты",
-                                        tint = ChatColors.Primary
-                                    )
-                                }
-                            } else {
-                                IconButton(onClick = {
-                                    viewModel.removeFromContacts(meshId)
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Filled.PersonRemove,
-                                        contentDescription = "Удалить из контактов",
-                                        tint = ChatColors.Primary
-                                    )
-                                }
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(
+                                    imageVector = Icons.Filled.MoreVert,
+                                    contentDescription = "Меню",
+                                    tint = ChatColors.Primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
                             }
+                            DirectChatDropdownMenu(
+                                expanded = menuExpanded,
+                                isContact = isAlreadyContact,
+                                onDismiss = { menuExpanded = false },
+                                onContact = {
+                                    menuExpanded = false
+                                    if (isAlreadyContact) {
+                                        viewModel.removeFromContacts(meshId)
+                                    } else {
+                                        val device = MeshDevice(
+                                            id = participantAddress,
+                                            name = participantName,
+                                            address = participantAddress,
+                                            meshId = meshId,
+                                            userName = participantName,
+                                            wifiDirectAddress = ""
+                                        )
+                                        viewModel.addToContacts(device)
+                                    }
+                                },
+                                onDeleteChat = {
+                                    menuExpanded = false
+                                    Timber.i("ЗДЕСЬ ПОКА НЕТ ФУНКЦИОНАЛА")
+                                }
+                            )
                         }
                     }
                 )
@@ -167,6 +202,10 @@ data class DirectChatScreen(
                     .padding(padding)
                     .background(ChatColors.BgDark)
             ) {
+                HorizontalDivider(
+                    color = ChatColors.DividerColor,
+                    thickness = 1.dp
+                )
                 // Messages list
                 LazyColumn(
                     modifier = Modifier.weight(1f),
@@ -378,7 +417,59 @@ private fun MessageInputPanel(
         }
     }
 }
-
+@Composable
+private fun DirectChatDropdownMenu(
+    expanded: Boolean,
+    isContact: Boolean,
+    onDismiss: () -> Unit,
+    onContact: () -> Unit,
+    onDeleteChat: () -> Unit
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF111111),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 0.dp,
+        border = BorderStroke(0.5.dp, Color(0xFF444444)),
+        offset = DpOffset(x = (-12).dp, y = (-42).dp)
+    ) {
+        DropdownMenuItem(
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(18.dp))
+                    Text("Удалить чат", color = Color(0xFFEAEAEA), fontFamily = SpaceMonoFont, fontSize = 13.sp)
+                }
+            },
+            onClick = onDeleteChat
+        )
+        DropdownMenuItem(
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isContact) Icons.Filled.PersonRemove else Icons.Filled.PersonAdd,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = if (isContact) "Удалить контакт" else "Добавить в контакты",
+                        color = Color(0xFFEAEAEA),
+                        fontFamily = SpaceMonoFont,
+                        fontSize = 13.sp
+                    )
+                }
+            },
+            onClick = onContact
+        )
+    }
+}
 @Composable
 private fun DirectMessageItem(
     message: MeshMessage,
@@ -401,12 +492,14 @@ private fun DirectMessageItem(
             shape = RoundedCornerShape(
                 topStart = 16.dp,
                 topEnd = 16.dp,
-                bottomStart = if (isFromMe) 16.dp else 4.dp,
-                bottomEnd = if (isFromMe) 4.dp else 16.dp
-            )
+                bottomStart = if (isFromMe) 0.dp else 16.dp,   // прямой угол у своих
+                bottomEnd = if (isFromMe) 16.dp else 0.dp,
+            ),
+            border = if (isFromMe) BorderStroke(1.dp, color = ChatColors.MessageBorderMe)
+            else BorderStroke(1.dp, color = ChatColors.MessageBorderOther)
         ) {
             Column(
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.padding(12.dp).width(IntrinsicSize.Max)
             ) {
                 when {
                     // Message with image attachment
@@ -507,11 +600,13 @@ fun ImageAttachmentContent(
                 )
             }
             else -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth().fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "🖼",
+                        "Изображение не найдено...",
                         style = androidx.compose.ui.text.TextStyle(
-                            fontSize = 48.sp
+                            fontSize = 24.sp,
+                            textAlign = TextAlign.Center,
+                            fontFamily = SpaceMonoFont
                         ),
                         color = ChatColors.TextSecondary
                     )
@@ -524,14 +619,6 @@ fun ImageAttachmentContent(
     }
 
     Spacer(modifier = Modifier.height(6.dp))
-    Text(
-        text = "${attachment.fileName} (${formatFileSize(attachment.sizeBytes)})",
-        style = androidx.compose.ui.text.TextStyle(
-            fontFamily = SpaceMonoFont,
-            fontSize = 11.sp,
-            color = ChatColors.TextSecondary
-        )
-    )
 }
 
 @Composable

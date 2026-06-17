@@ -49,7 +49,7 @@ public object ChatColors {
     val Secondary = Color(0xFF00FFA3)
     val TextPrimary = Color(0xFFEAEAEA)
     val TextSecondary = Color(0xFFA8A8A8)
-    val DividerColor = Color(0xFF1A1A1A)
+    val DividerColor = Color(0xFF444444)
     val CardBg = Color(0xFF111111)
     val MessageBgMe = Color(0xFF0D3D3F)
     val MessageBorderMe = Color(0xFF156265)

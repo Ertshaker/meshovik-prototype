@@ -14,13 +14,18 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Radar
+import androidx.compose.material.icons.outlined.CellTower
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.meshovik.core.util.MeshUtils
@@ -28,7 +33,10 @@ import com.meshovik.domain.entity.Chat
 import com.meshovik.domain.entity.ChatType
 import com.meshovik.domain.entity.MeshDevice
 import com.meshovik.presentation.screens.ChatColors
+import com.meshovik.presentation.screens.SectionHeader
 import com.meshovik.presentation.screens.SpaceMonoFont
+import kotlinx.datetime.format
+import java.time.format.DateTimeFormatter
 
 /**
  * Drawer content with contacts list.
@@ -50,17 +58,15 @@ fun ChatDrawerContent(
         drawerContainerColor = Color(0xFF0A0A0A),
         drawerContentColor = ChatColors.TextPrimary,
         drawerTonalElevation = 0.dp,
-        windowInsets = WindowInsets(0, 0, 0, 0)
+        windowInsets = WindowInsets(0, 0, 0, 0),
+        modifier = Modifier.oneSideBorder(side = BorderSide.End, strokeWidth = 0.5.dp, color = ChatColors.DividerColor)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
                 .width(270.dp)
                 .statusBarsPadding()
-                .border(
-                    BorderStroke(1.dp, Color(0xFF1F1F1F)),
-                    RoundedCornerShape(topEnd = 0.dp, bottomEnd = 0.dp)
-                )
+
         ) {
             // Header MESHOVIK
             Text(
@@ -77,25 +83,25 @@ fun ChatDrawerContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .background(Color(0xFF111111), RoundedCornerShape(12.dp))
-                    .padding(8.dp),
+                    .background(Color(0x1200E5FF))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(42.dp),
                     shape = RoundedCornerShape(10.dp),
-                    color = Color.Transparent,
+                    color = Color(0x1200E5FF),
+                    border = BorderStroke(1.dp, Color(0x6900E5FF))
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Bluetooth,
+                        imageVector = Icons.Filled.Person,
                         contentDescription = null,
-                        tint = ChatColors.Primary,
-                        modifier = Modifier.padding(10.dp)
+                        tint = ChatColors.TextPrimary,
+                        modifier = Modifier.padding(9.dp)
                     )
                 }
 
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(14.dp))
 
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -109,9 +115,6 @@ fun ChatDrawerContent(
             }
 
             Spacer(Modifier.height(8.dp))
-            HorizontalDivider(thickness = 1.dp, color = ChatColors.DividerColor)
-            Spacer(Modifier.height(8.dp))
-
 
             val broadcastChat = chats.find { it.type == ChatType.BROADCAST }
             if (broadcastChat != null) {
@@ -124,17 +127,10 @@ fun ChatDrawerContent(
                 )
             }
 
-            Spacer(Modifier.height(16.dp))
-
             // КОНТАКТЫ section
-            Text(
-                text = "КОНТАКТЫ",
-                fontFamily = SpaceMonoFont,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = ChatColors.TextSecondary,
-                letterSpacing = 1.2.sp,
-                modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
+            SectionHeader(
+                label = "КОНТАКТЫ",
+                modifier = Modifier.padding(top = 12.dp)
             )
 
             LazyColumn(
@@ -173,7 +169,7 @@ private fun BroadcastChatDrawerItem(
             color = Color.Transparent,
         ) {
             Icon(
-                imageVector = Icons.Filled.Radar,
+                imageVector = Icons.Outlined.CellTower,
                 contentDescription = null,
                 tint = ChatColors.Primary,
                 modifier = Modifier.padding(9.dp)
@@ -230,12 +226,62 @@ private fun ContactDrawerItem(
                 fontWeight = FontWeight.Medium,
                 color = ChatColors.TextPrimary
             )
-            Text(
-                text = "в сети",   // позже заменим на реальный статус
-                fontFamily = SpaceMonoFont,
-                fontSize = 12.sp,
-                color = Color(0xFF00E5FF)
-            )
+            if (device.isOnline) {
+                Text(
+                    text = "в сети",
+                    fontFamily = SpaceMonoFont,
+                    fontSize = 12.sp,
+                    color = Color(0xFF00E5FF)
+                )
+            } else {
+                Text(
+                    text = "Был в сети ${MeshUtils.formatTimestamp(device.lastSeen.toEpochMilliseconds())}",
+                    fontFamily = SpaceMonoFont,
+                    fontSize = 12.sp,
+                    color = Color(0x6900E5FF)
+                )
+            }
+
         }
     }
+}
+
+enum class BorderSide {
+    Top, Bottom, Start, End
+}
+
+fun Modifier.oneSideBorder(
+    side: BorderSide,
+    strokeWidth: Dp,
+    color: Color
+): Modifier = this.drawWithContent {
+    // Render the actual component content first
+    drawContent()
+
+    // Calculate the stroke width in pixels
+    val strokeWidthPx = strokeWidth.toPx()
+
+    // Determine the start and end coordinates based on the selected side
+    val (start, end) = when (side) {
+        BorderSide.Top -> {
+            Offset(0f, strokeWidthPx / 2) to Offset(size.width, strokeWidthPx / 2)
+        }
+        BorderSide.Bottom -> {
+            Offset(0f, size.height - strokeWidthPx / 2) to Offset(size.width, size.height - strokeWidthPx / 2)
+        }
+        BorderSide.Start -> {
+            Offset(strokeWidthPx / 2, 0f) to Offset(strokeWidthPx / 2, size.height)
+        }
+        BorderSide.End -> {
+            Offset(size.width - strokeWidthPx / 2, 0f) to Offset(size.width - strokeWidthPx / 2, size.height)
+        }
+    }
+
+    // Draw the single border line
+    drawLine(
+        color = color,
+        start = start,
+        end = end,
+        strokeWidth = strokeWidthPx
+    )
 }

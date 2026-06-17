@@ -21,7 +21,10 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.absoluteValue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.Instant
 
 class MeshRepository(
     private val database: MeshovikDatabase,
@@ -62,7 +65,7 @@ class MeshRepository(
                         name = profile.display_name,
                         address = profile.mesh_id,
                         rssi = 0,
-                        lastSeen = Clock.System.now(),
+                        lastSeen = Instant.fromEpochMilliseconds(profile.last_seen),
                         isOnline = false,
                         hopCount = 0,
                         meshId = profile.mesh_id,
@@ -133,7 +136,7 @@ class MeshRepository(
                         address = profile.mesh_id,
                         meshId = profile.mesh_id,
                         userName = profile.display_name,
-                        lastSeen = Clock.System.now(), // можно взять из БД
+                        lastSeen = Instant.fromEpochMilliseconds(profile.last_seen), // можно взять из БД
                         isOnline = false,
                         rssi = 0,
                         hopCount = 0,
@@ -468,7 +471,45 @@ class MeshRepository(
             database.meshovikQueries.updateAttachmentLocalUri(localUri, attachmentId)
         }
     }
+    fun updateDeviceOnlineStatus(device: MeshDevice) {
+        val now = Clock.System.now()
 
+        _devices.update { current ->
+            val index = current.indexOfFirst { it.address == device.address || it.meshId == device.meshId }
+            if (index >= 0) {
+                val updated = current[index].copy(
+                    isOnline = true,
+                    lastSeen = now,
+                    name = device.name,
+                    userName = device.userName
+                )
+                current.toMutableList().apply { this[index] = updated }
+            } else {
+                current + device.copy(isOnline = true, lastSeen = now)
+            }
+        }
+
+        // Также обновляем контакты
+        _contacts.update { current ->
+            val index = current.indexOfFirst { it.meshId == device.meshId || it.address == device.address }
+            if (index >= 0) {
+                val updated = current[index].copy(isOnline = true, lastSeen = now)
+                current.toMutableList().apply { this[index] = updated }
+            } else {
+                current + device.copy(isOnline = true, lastSeen = now)
+            }
+        }
+    }
+
+    // Опционально: метод для принудительного offline (по таймеру)
+    fun markDeviceOffline(address: String) {
+        _devices.update { list ->
+            list.map { if (it.address == address) it.copy(isOnline = false) else it }
+        }
+        _contacts.update { list ->
+            list.map { if (it.address == address) it.copy(isOnline = false) else it }
+        }
+    }
     fun clear() {
         _devices.value = emptyList()
         _chats.value = emptyList()

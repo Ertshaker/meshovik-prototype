@@ -158,13 +158,23 @@ class MeshViewModel(
 
                 uniqueDevices.forEach { device ->
                     meshRepository.updateDevice(device)
+
+                    meshRepository.updateChatFromDevice(device)
                 }
 
                 _uiState.update { it.copy(devices = uniqueDevices) }
             }
         }
     }
-
+    fun getParticipantDeviceFlow(meshIdOrAddress: String): StateFlow<MeshDevice?> {
+        return meshRepository.contacts.map { contacts ->
+            contacts.find { it.meshId == meshIdOrAddress || it.address == meshIdOrAddress }
+        }.stateIn(
+            scope = scope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = null
+        )
+    }
     fun isContactFlow(meshIdOrAddress: String): StateFlow<Boolean> {
         return meshRepository.contacts.map { contacts ->
             contacts.any {

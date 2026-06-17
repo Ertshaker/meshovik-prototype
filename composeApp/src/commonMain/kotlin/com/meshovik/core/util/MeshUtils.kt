@@ -34,8 +34,7 @@ object MeshUtils {
         val dateTime = kotlinxInstant.toLocalDateTime(kotlinx.datetime.TimeZone.currentSystemDefault())
 
         return "${dateTime.hour.toString().padStart(2, '0')}:" +
-                "${dateTime.minute.toString().padStart(2, '0')}:" +
-                "${dateTime.second.toString().padStart(2, '0')}"
+                "${dateTime.minute.toString().padStart(2, '0')}"
     }
 
     /**
